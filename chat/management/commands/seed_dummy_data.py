@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from chat.models import FactoryLine, Product, ProductionOrder, SalesRecord
+from chat.models import FactoryLine, InventoryRecord, Product, ProductionOrder, SalesRecord
 
 
 def month_offset(reference: date, offset: int) -> date:
@@ -23,6 +23,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         SalesRecord.objects.all().delete()
         ProductionOrder.objects.all().delete()
+        InventoryRecord.objects.all().delete()
         FactoryLine.objects.all().delete()
         Product.objects.all().delete()
 
@@ -79,11 +80,28 @@ class Command(BaseCommand):
                 estimated_completion=completion,
             )
 
+        inventory_rows = [
+            ("Widget A", 1850, 320, 500, "Main Warehouse"),
+            ("Widget B", 420, 75, 300, "Main Warehouse"),
+            ("Gadget Pro", 95, 40, 150, "East Distribution Center"),
+        ]
+        for product_name, on_hand, reserved, reorder_point, warehouse in inventory_rows:
+            product = Product.objects.get(name=product_name)
+            InventoryRecord.objects.create(
+                product=product,
+                quantity_on_hand=on_hand,
+                reserved_quantity=reserved,
+                reorder_point=reorder_point,
+                warehouse=warehouse,
+                last_updated=now,
+            )
+
         self.stdout.write(
             self.style.SUCCESS(
                 f"Seeded {Product.objects.count()} products, "
                 f"{SalesRecord.objects.count()} sales records, "
-                f"{FactoryLine.objects.count()} factory lines, and "
-                f"{ProductionOrder.objects.count()} production orders."
+                f"{FactoryLine.objects.count()} factory lines, "
+                f"{ProductionOrder.objects.count()} production orders, and "
+                f"{InventoryRecord.objects.count()} inventory records."
             )
         )

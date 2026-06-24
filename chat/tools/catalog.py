@@ -1,18 +1,25 @@
 import json
 
+from django.db.models import Exists, OuterRef
 from strands import tool
 
-from chat.models import Product
+from chat.models import InventoryRecord, Product
 
 
 def fetch_product_catalog() -> list[dict]:
-    products = Product.objects.prefetch_related("sales_records", "production_orders").order_by("name")
+    inventory_exists = InventoryRecord.objects.filter(product=OuterRef("pk"))
+    products = (
+        Product.objects.annotate(has_inventory_data=Exists(inventory_exists))
+        .prefetch_related("sales_records", "production_orders")
+        .order_by("name")
+    )
     return [
         {
             "name": product.name,
             "sku": product.sku,
             "has_sales_data": product.sales_records.exists(),
             "has_production_data": product.production_orders.exists(),
+            "has_inventory_data": product.has_inventory_data,
         }
         for product in products
     ]
@@ -29,6 +36,8 @@ def format_product_catalog(products: list[dict]) -> str:
             data_types.append("sales history")
         if product["has_production_data"]:
             data_types.append("production schedule")
+        if product["has_inventory_data"]:
+            data_types.append("inventory levels")
         detail = ", ".join(data_types) if data_types else "no data"
         lines.append(f"- {product['name']} (SKU: {product['sku']}) — {detail}")
 

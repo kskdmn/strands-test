@@ -3,6 +3,7 @@ from strands import Agent, tool
 
 from chat.flow_log import FLOW_LOG_HOOKS
 from chat.tools.factory import fetch_factory_status
+from chat.tools.inventory import fetch_inventory_status
 from chat.tools.sales import fetch_past_sales_data
 
 
@@ -52,6 +53,32 @@ def production_schedule_assistant(query: str) -> str:
             "will be produced and what is currently running."
         ),
         tools=[fetch_factory_status],
+        hooks=[FLOW_LOG_HOOKS],
+        callback_handler=None,
+    )
+    return str(agent(query))
+
+
+@tool
+def inventory_assistant(query: str) -> str:
+    """Answer inventory questions such as stock levels, availability, and reorder status.
+
+    Args:
+        query: An inventory question, optionally naming a product.
+
+    Returns:
+        An explanation of current stock levels and projected availability.
+    """
+    agent = Agent(
+        model=settings.CHAT_MODEL_ID,
+        name="inventory",
+        system_prompt=(
+            "You are an inventory management specialist. "
+            "Always call fetch_inventory_status before answering. "
+            "Use on-hand quantities, reservations, reorder points, and incoming "
+            "production to explain stock health and projected availability."
+        ),
+        tools=[fetch_inventory_status],
         hooks=[FLOW_LOG_HOOKS],
         callback_handler=None,
     )

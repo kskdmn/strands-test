@@ -80,6 +80,25 @@ class FactoryLine(models.Model):
         return self.name
 
 
+class InventoryRecord(models.Model):
+    product = models.OneToOneField(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="inventory",
+    )
+    quantity_on_hand = models.PositiveIntegerField()
+    reserved_quantity = models.PositiveIntegerField(default=0)
+    reorder_point = models.PositiveIntegerField()
+    warehouse = models.CharField(max_length=100, default="Main Warehouse")
+    last_updated = models.DateTimeField()
+
+    class Meta:
+        ordering = ["product__name"]
+
+    def __str__(self) -> str:
+        return f"{self.product.name} ({self.quantity_on_hand} on hand)"
+
+
 class ProductionOrder(models.Model):
     class Status(models.TextChoices):
         PLANNED = "planned", "Planned"

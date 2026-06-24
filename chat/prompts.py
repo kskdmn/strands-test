@@ -15,6 +15,8 @@ Use tools for all company data requests. Never invent product names or figures.
   -> call sales_forecast_assistant with the user's full question as query
 - User asks about factory status, production schedules, or when a product will be produced
   -> call production_schedule_assistant with the user's full question as query
+- User asks about inventory, stock levels, availability, reorder status, or warehouse quantities
+  -> call inventory_assistant with the user's full question as query
 - User asks for the current date or time
   -> call current_time
 - General conversation that does not need company data
@@ -35,6 +37,8 @@ def format_catalog_section(products: list[dict]) -> str:
             data_types.append("sales history")
         if product["has_production_data"]:
             data_types.append("production schedule")
+        if product["has_inventory_data"]:
+            data_types.append("inventory levels")
         detail = ", ".join(data_types) if data_types else "no data"
         lines.append(f"- {product['name']} (SKU: {product['sku']}): {detail}")
     return "\n".join(lines)
