@@ -1,6 +1,7 @@
 from django.conf import settings
 from strands import Agent, tool
 
+from chat.flow_log import FLOW_LOG_HOOKS
 from chat.tools.factory import fetch_factory_status
 from chat.tools.sales import fetch_past_sales_data
 
@@ -17,6 +18,7 @@ def sales_forecast_assistant(query: str) -> str:
     """
     agent = Agent(
         model=settings.CHAT_MODEL_ID,
+        name="sales_forecast",
         system_prompt=(
             "You are a sales forecasting specialist. "
             "Always call fetch_past_sales_data before answering. "
@@ -24,6 +26,8 @@ def sales_forecast_assistant(query: str) -> str:
             "explain trends, and note assumptions clearly."
         ),
         tools=[fetch_past_sales_data],
+        hooks=[FLOW_LOG_HOOKS],
+        callback_handler=None,
     )
     return str(agent(query))
 
@@ -40,6 +44,7 @@ def production_schedule_assistant(query: str) -> str:
     """
     agent = Agent(
         model=settings.CHAT_MODEL_ID,
+        name="production_schedule",
         system_prompt=(
             "You are a factory production specialist. "
             "Always call fetch_factory_status before answering. "
@@ -47,5 +52,7 @@ def production_schedule_assistant(query: str) -> str:
             "will be produced and what is currently running."
         ),
         tools=[fetch_factory_status],
+        hooks=[FLOW_LOG_HOOKS],
+        callback_handler=None,
     )
     return str(agent(query))

@@ -123,3 +123,27 @@ CHAT_MODEL_ID = "google.gemma-3-4b-it"
 
 # None = detect from the server OS timezone (for example, Asia/Tokyo in Japan).
 CHAT_LOCAL_TIMEZONE = None
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "flow": {
+            "format": "%(asctime)s %(levelname)s %(message)s",
+            "datefmt": "%H:%M:%S",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "flow",
+        },
+    },
+    "loggers": {
+        "chat.flow": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
