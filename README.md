@@ -9,6 +9,54 @@ The main agent routes specialized questions to two subagents:
 - **Sales forecast agent** — uses `fetch_past_sales_data` to read historical sales from SQLite
 - **Production schedule agent** — uses `fetch_factory_status` to read factory lines and production orders
 
+## Query flow
+
+```mermaid
+flowchart TB
+    User[User] --> UI[Chat UI]
+    UI --> API[Django API]
+    API --> Orch[Main orchestrator]
+    Orch --> Route{Route query?}
+
+    Route -->|General| Direct[Answer directly]
+
+    subgraph SalesPath["Sales path"]
+        direction TB
+        SA[Sales subagent] --> ST[fetch_past_sales_data] --> SDB[(SQLite)]
+    end
+
+    subgraph ProdPath["Production path"]
+        direction TB
+        PA[Production subagent] --> PT[fetch_factory_status] --> PDB[(SQLite)]
+    end
+
+    Route -->|Sales| SA
+    Route -->|Production| PA
+
+    Direct --> Reply[Final reply]
+    SA --> Reply
+    PA --> Reply
+
+    Reply --> RespAPI[Django API]
+    RespAPI --> RespUI[Chat UI]
+    RespUI --> UserOut[User]
+
+    classDef client fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
+    classDef server fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    classDef agent fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    classDef data fill:#f3e8ff,stroke:#9333ea,color:#581c87
+
+    class User,UI,RespUI,UserOut client
+    class API,RespAPI,Reply server
+    class Orch,Route,Direct,SA,PA agent
+    class ST,PT,SDB,PDB data
+```
+
+1. The user sends a message from the chat UI to the Django API.
+2. The main orchestrator inspects the query and picks one path: sales, production, or a direct answer.
+3. Specialist subagents call their tool, read from SQLite, and return a focused answer.
+4. The orchestrator composes the final reply and sends it back through the API to the chat UI.
+
 ## Setup
 
 ```bash
