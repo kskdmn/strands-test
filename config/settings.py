@@ -120,3 +120,6 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CHAT_MODEL_ID = "google.gemma-3-4b-it"
+
+# None = detect from the server OS timezone (for example, Asia/Tokyo in Japan).
+CHAT_LOCAL_TIMEZONE = None
