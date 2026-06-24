@@ -1,0 +1,51 @@
+from django.conf import settings
+from strands import Agent, tool
+
+from chat.tools.factory import fetch_factory_status
+from chat.tools.sales import fetch_past_sales_data
+
+
+@tool
+def sales_forecast_assistant(query: str) -> str:
+    """Forecast future sales using historical sales data.
+
+    Args:
+        query: A sales forecasting question, optionally naming a product or time horizon.
+
+    Returns:
+        A sales forecast based on past sales records.
+    """
+    agent = Agent(
+        model=settings.CHAT_MODEL_ID,
+        system_prompt=(
+            "You are a sales forecasting specialist. "
+            "Always call fetch_past_sales_data before answering. "
+            "Use the returned historical data to estimate future sales, "
+            "explain trends, and note assumptions clearly."
+        ),
+        tools=[fetch_past_sales_data],
+    )
+    return str(agent(query))
+
+
+@tool
+def production_schedule_assistant(query: str) -> str:
+    """Explain factory production status and when products will be produced.
+
+    Args:
+        query: A production scheduling question, optionally naming a product.
+
+    Returns:
+        An explanation of factory status and expected production timing.
+    """
+    agent = Agent(
+        model=settings.CHAT_MODEL_ID,
+        system_prompt=(
+            "You are a factory production specialist. "
+            "Always call fetch_factory_status before answering. "
+            "Use line status and production orders to explain when a product "
+            "will be produced and what is currently running."
+        ),
+        tools=[fetch_factory_status],
+    )
+    return str(agent(query))

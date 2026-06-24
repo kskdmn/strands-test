@@ -4,11 +4,17 @@ A Django app with a chat UI and JSON HTTP API, backed by a [Strands Agents](http
 
 The browser UI at `/` sends messages to the API, which stores conversation history in SQLite and returns assistant replies. No login or other pages are included.
 
+The main agent routes specialized questions to two subagents:
+
+- **Sales forecast agent** — uses `fetch_past_sales_data` to read historical sales from SQLite
+- **Production schedule agent** — uses `fetch_factory_status` to read factory lines and production orders
+
 ## Setup
 
 ```bash
 uv sync
 uv run python manage.py migrate
+uv run python manage.py seed_dummy_data
 ```
 
 Set AWS credentials for Bedrock (for example `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`).

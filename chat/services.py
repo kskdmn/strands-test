@@ -5,7 +5,22 @@ from django.conf import settings
 from django.db.models import QuerySet
 from strands import Agent
 
+from chat.agents.subagents import production_schedule_assistant, sales_forecast_assistant
 from chat.models import Conversation, Message
+
+ORCHESTRATOR_SYSTEM_PROMPT = """
+You are the main assistant for a manufacturing company chat.
+
+Route specialized requests to the right tool:
+- Sales forecasts, demand planning, or questions about past sales trends
+  -> use sales_forecast_assistant
+- Factory status, production schedules, or when a product will be produced
+  -> use production_schedule_assistant
+- General conversation that does not need company data -> answer directly
+
+When routing, pass the user's full question to the selected tool.
+Keep final answers concise and conversational.
+""".strip()
 
 
 class ChatService:
@@ -13,10 +28,8 @@ class ChatService:
     _lock = threading.Lock()
 
     def __init__(self) -> None:
-        self._system_prompt = (
-            "You are a helpful assistant in a web chat. "
-            "Keep responses concise and conversational."
-        )
+        self._system_prompt = ORCHESTRATOR_SYSTEM_PROMPT
+        self._tools = [sales_forecast_assistant, production_schedule_assistant]
 
     def create_conversation(self) -> Conversation:
         return Conversation.objects.create()
@@ -54,6 +67,7 @@ class ChatService:
                 model=settings.CHAT_MODEL_ID,
                 system_prompt=self._system_prompt,
                 messages=messages,
+                tools=self._tools,
             )
             self._agents[key] = agent
             return agent
