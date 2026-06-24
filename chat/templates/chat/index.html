@@ -1,0 +1,45 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chat</title>
+  <link rel="stylesheet" href="{% static 'chat/css/chat.css' %}">
+</head>
+<body>
+  <main class="chat-app">
+    <header class="chat-header">
+      <div>
+        <p class="eyebrow">Strands Test</p>
+        <h1>Chat</h1>
+      </div>
+      <button id="new-chat-button" type="button" class="secondary-button">New chat</button>
+    </header>
+
+    <section id="message-list" class="message-list" aria-live="polite"></section>
+
+    <form id="chat-form" class="chat-form">
+      {% csrf_token %}
+      <label class="sr-only" for="message-input">Message</label>
+      <textarea
+        id="message-input"
+        name="message"
+        rows="1"
+        placeholder="Send a message..."
+        required
+      ></textarea>
+      <button id="send-button" type="submit">Send</button>
+    </form>
+  </main>
+
+  <template id="message-template">
+    <article class="message">
+      <div class="message-meta"></div>
+      <div class="message-content"></div>
+    </article>
+  </template>
+
+  <script src="{% static 'chat/js/chat.js' %}"></script>
+</body>
+</html>
