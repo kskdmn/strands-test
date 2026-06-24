@@ -3,13 +3,17 @@ import json
 from django.db.models import Exists, OuterRef
 from strands import tool
 
-from chat.models import InventoryRecord, Product
+from chat.models import InventoryRecord, Product, SalesForecast
 
 
 def fetch_product_catalog() -> list[dict]:
     inventory_exists = InventoryRecord.objects.filter(product=OuterRef("pk"))
+    forecast_exists = SalesForecast.objects.filter(product=OuterRef("pk"))
     products = (
-        Product.objects.annotate(has_inventory_data=Exists(inventory_exists))
+        Product.objects.annotate(
+            has_inventory_data=Exists(inventory_exists),
+            has_forecast_data=Exists(forecast_exists),
+        )
         .prefetch_related("sales_records", "production_orders")
         .order_by("name")
     )
@@ -20,6 +24,7 @@ def fetch_product_catalog() -> list[dict]:
             "has_sales_data": product.sales_records.exists(),
             "has_production_data": product.production_orders.exists(),
             "has_inventory_data": product.has_inventory_data,
+            "has_forecast_data": product.has_forecast_data,
         }
         for product in products
     ]
@@ -38,6 +43,8 @@ def format_product_catalog(products: list[dict]) -> str:
             data_types.append("production schedule")
         if product["has_inventory_data"]:
             data_types.append("inventory levels")
+        if product["has_forecast_data"]:
+            data_types.append("sales forecast")
         detail = ", ".join(data_types) if data_types else "no data"
         lines.append(f"- {product['name']} (SKU: {product['sku']}) — {detail}")
 

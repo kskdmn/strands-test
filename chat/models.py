@@ -99,6 +99,25 @@ class InventoryRecord(models.Model):
         return f"{self.product.name} ({self.quantity_on_hand} on hand)"
 
 
+class SalesForecast(models.Model):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="sales_forecasts",
+    )
+    month = models.DateField()
+    forecast_units = models.PositiveIntegerField()
+    notes = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["month"]
+        unique_together = ("product", "month")
+
+    def __str__(self) -> str:
+        return f"{self.product.name} forecast ({self.month:%Y-%m}): {self.forecast_units}"
+
+
 class ProductionOrder(models.Model):
     class Status(models.TextChoices):
         PLANNED = "planned", "Planned"

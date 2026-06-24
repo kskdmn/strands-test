@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from chat.models import FactoryLine, InventoryRecord, Product, ProductionOrder, SalesRecord
+from chat.models import FactoryLine, InventoryRecord, Product, ProductionOrder, SalesForecast, SalesRecord
 
 
 def month_offset(reference: date, offset: int) -> date:
@@ -22,6 +22,7 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **options):
         SalesRecord.objects.all().delete()
+        SalesForecast.objects.all().delete()
         ProductionOrder.objects.all().delete()
         InventoryRecord.objects.all().delete()
         FactoryLine.objects.all().delete()
@@ -54,6 +55,21 @@ class Command(BaseCommand):
                     units_sold=units,
                     revenue=unit_prices[product.name] * units,
                 )
+
+        forecast_month = date(2026, 7, 1)
+        forecast_rows = [
+            ("Widget A", 1400, "Strong summer demand"),
+            ("Widget B", 600, "Steady growth"),
+            ("Gadget Pro", 380, "New marketing campaign"),
+        ]
+        for product_name, units, note in forecast_rows:
+            product = Product.objects.get(name=product_name)
+            SalesForecast.objects.create(
+                product=product,
+                month=forecast_month,
+                forecast_units=units,
+                notes=note,
+            )
 
         lines = [
             FactoryLine.objects.create(name="Assembly Line 1", status=FactoryLine.Status.RUNNING),
@@ -100,6 +116,7 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"Seeded {Product.objects.count()} products, "
                 f"{SalesRecord.objects.count()} sales records, "
+                f"{SalesForecast.objects.count()} sales forecasts, "
                 f"{FactoryLine.objects.count()} factory lines, "
                 f"{ProductionOrder.objects.count()} production orders, and "
                 f"{InventoryRecord.objects.count()} inventory records."

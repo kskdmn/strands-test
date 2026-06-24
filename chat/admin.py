@@ -6,6 +6,7 @@ from chat.models import (
     Message,
     Product,
     ProductionOrder,
+    SalesForecast,
     SalesRecord,
 )
 
@@ -45,6 +46,13 @@ class SalesRecordAdmin(admin.ModelAdmin):
 class FactoryLineAdmin(admin.ModelAdmin):
     list_display = ("name", "status")
     list_filter = ("status",)
+
+
+@admin.register(SalesForecast)
+class SalesForecastAdmin(admin.ModelAdmin):
+    list_display = ("product", "month", "forecast_units", "updated_at")
+    list_filter = ("month",)
+    search_fields = ("product__name",)
 
 
 @admin.register(ProductionOrder)
