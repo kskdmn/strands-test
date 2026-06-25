@@ -13,7 +13,7 @@ The browser UI at `/` sends messages to the API, which stores conversation histo
 - **Planning agent** — uses `update_sales_forecast` and `suggest_production_plan` to revise demand assumptions and recommend advisory production changes
 - **Current time tool** — uses `current_time` to return the local date and time
 
-The model is instructed to call tools through the Strands tool interface. If it still prints a `tool_code` block, `resolve_leaked_tool_response` parses and runs the matching local tool, and redirects forecast-driven production requests from `production_schedule_assistant` to `planning_assistant`.
+The model is instructed to call tools through the Strands tool interface. If it still prints a `tool_code` block, `resolve_leaked_tool_response` parses JSON blocks such as `{"tool": "planning_assistant", "query": "..."}` and Python-style blocks such as `planning_assistant(query="...")`, runs the matching local tool, and redirects forecast-driven production requests from `production_schedule_assistant` to `planning_assistant`.
 
 ## Query flow
 
@@ -106,7 +106,7 @@ flowchart TB
 3. The orchestrator follows the prompt routing rules: product catalog, sales, production schedule, inventory, planning, time, or direct general conversation.
 4. Specialist subagents call their database-backed tools. Planning requests update `SalesMonthlyData.plan_units` when the user changes forecasts, then compare forecast demand with inventory and incoming production. Recommendations are advisory; they do not create production plan rows.
 5. Every request, agent invocation, model call, and tool call is logged through `FLOW_LOG_HOOKS` with the conversation ID.
-6. If the model prints a tool call instead of invoking it, `resolve_leaked_tool_response` runs the equivalent local tool. Forecast-driven production leaks are redirected to `planning_assistant`.
+6. If the model prints a JSON or Python-style tool call instead of invoking it, `resolve_leaked_tool_response` runs the equivalent local tool. Forecast-driven production leaks are redirected to `planning_assistant`.
 7. The final assistant text is stored with the user message and returned through the API to the chat UI.
 
 ## Setup

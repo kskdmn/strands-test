@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 
@@ -162,7 +162,44 @@ class PlanningTests(TestCase):
         self.assertIn("Do NOT use production_schedule_assistant", prompt)
 
 
+class ChatServiceTests(TestCase):
+    def test_combined_forecast_plan_request_routes_through_orchestrator(self):
+        from chat.models import Conversation
+        from chat.services import ChatService
+
+        conversation = Conversation.objects.create()
+        content = "Update Widget A forecast to 1500 units for August 2026 and suggest a production plan."
+        mock_agent = MagicMock(return_value="Forecast updated. Production plan suggested.")
+
+        service = ChatService()
+        with patch.object(service, "_get_agent", return_value=mock_agent) as mock_get_agent:
+            user_message, assistant_message = service.send_message(conversation.id, content)
+
+        mock_get_agent.assert_called_once_with(conversation.id)
+        mock_agent.assert_called_once()
+        self.assertEqual(user_message.content, content)
+        self.assertEqual(assistant_message.content, "Forecast updated. Production plan suggested.")
+
+
 class ToolFallbackTests(TestCase):
+    def test_runs_json_tool_code_block_through_planning_assistant(self):
+        leaked = (
+            "```tool_code\n"
+            "{\n"
+            '  "tool": "planning_assistant",\n'
+            '  "query": "Update Widget A forecast to 1500 units for August 2026 and suggest a production plan."\n'
+            "}\n"
+            "```"
+        )
+        with patch("chat.tool_fallback.planning_assistant") as mock_planning:
+            mock_planning.return_value = "Forecast updated. Build 200 units on Assembly Line 1."
+            result = resolve_leaked_tool_response(leaked)
+
+        mock_planning.assert_called_once_with(
+            query="Update Widget A forecast to 1500 units for August 2026 and suggest a production plan."
+        )
+        self.assertEqual(result, "Forecast updated. Build 200 units on Assembly Line 1.")
+
     def test_redirects_production_schedule_leak_to_planning_assistant(self):
         leaked = (
             "Okay, I've updated the forecast.\n\n"

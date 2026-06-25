@@ -115,7 +115,11 @@ def update_sales_forecast(
 
 
 @tool
-def suggest_production_plan(product_name: str | None = None, months: int = 1) -> str:
+def suggest_production_plan(
+    product_name: str | None = None,
+    months: int = 1,
+    start_month: str | None = None,
+) -> str:
     """Suggest production changes based on saved sales forecasts and current supply.
 
     Compares forecast demand against available inventory and incoming production,
@@ -124,15 +128,22 @@ def suggest_production_plan(product_name: str | None = None, months: int = 1) ->
     Args:
         product_name: Optional product name filter. Returns all products when omitted.
         months: Number of upcoming forecast months to plan for, up to 6.
+        start_month: Optional first forecast month to include in YYYY-MM format.
 
     Returns:
         JSON string with supply gaps and recommended production actions.
     """
     months = max(1, min(months, 6))
+    first_month = current_month_start()
+    if start_month:
+        try:
+            first_month = _parse_month(start_month)
+        except (ValueError, AttributeError):
+            return json.dumps({"error": "start_month must be in YYYY-MM format."})
 
     forecasts = (
         SalesMonthlyData.objects.select_related("product")
-        .filter(month__gte=current_month_start(), plan_units__isnull=False)
+        .filter(month__gte=first_month, plan_units__isnull=False)
         .order_by("product__name", "month")
     )
     if product_name:

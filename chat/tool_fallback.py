@@ -1,4 +1,5 @@
 import ast
+import json
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -15,9 +16,10 @@ from chat.tools.planning import suggest_production_plan, update_sales_forecast
 from chat.tools.time import current_time
 
 TOOL_CODE_BLOCK = re.compile(
-    r"```(?:tool_code|python)\s*\n\s*(\w+)\(([^)]*)\)\s*\n\s*```",
+    r"```(?:tool_code|python)\s*\n(?P<body>.*?)\n\s*```",
     re.IGNORECASE | re.DOTALL,
 )
+PYTHON_TOOL_CALL = re.compile(r"^\s*(\w+)\((.*)\)\s*$", re.DOTALL)
 
 PLANNING_QUERY_KEYWORDS = (
     "forecast",
@@ -52,6 +54,49 @@ def _parse_keyword_args(args_str: str) -> dict:
     return args
 
 
+def _parse_json_tool_call(block_body: str) -> tuple[str, dict] | None:
+    try:
+        payload = json.loads(block_body)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    tool_name = payload.get("tool")
+    if not isinstance(tool_name, str):
+        return None
+
+    args = payload.get("args", {})
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return None
+
+    for key, value in payload.items():
+        if key not in {"tool", "args"}:
+            args.setdefault(key, value)
+
+    return tool_name, args
+
+
+def _parse_tool_code_block(text: str) -> tuple[str, dict] | None:
+    match = TOOL_CODE_BLOCK.search(text.strip())
+    if not match:
+        return None
+
+    block_body = match.group("body").strip()
+    json_tool_call = _parse_json_tool_call(block_body)
+    if json_tool_call:
+        return json_tool_call
+
+    python_call = PYTHON_TOOL_CALL.match(block_body)
+    if not python_call:
+        return None
+
+    return python_call.group(1), _parse_keyword_args(python_call.group(2))
+
+
 def _should_redirect_to_planning(query: str) -> bool:
     lowered = query.lower()
     return any(keyword in lowered for keyword in PLANNING_QUERY_KEYWORDS)
@@ -68,12 +113,11 @@ def _run_assistant(tool_name: str, tool: Callable[..., str], args: dict) -> str:
 
 def resolve_leaked_tool_response(text: str) -> str:
     """Run a tool locally when the model prints a tool call as plain text."""
-    match = TOOL_CODE_BLOCK.search(text.strip())
-    if not match:
+    tool_call = _parse_tool_code_block(text)
+    if not tool_call:
         return text
 
-    tool_name = match.group(1)
-    args = _parse_keyword_args(match.group(2))
+    tool_name, args = tool_call
 
     if tool_name == "production_schedule_assistant":
         query = args.get("query", "")

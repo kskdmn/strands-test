@@ -4,6 +4,7 @@ from uuid import UUID
 from django.conf import settings
 from django.db.models import QuerySet
 from strands import Agent
+
 from chat.tools.catalog import list_available_products
 from chat.tools.time import current_time
 
