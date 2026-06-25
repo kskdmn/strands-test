@@ -2,7 +2,8 @@ import json
 
 from strands import tool
 
-from chat.models import FactoryLine, ProductionOrder
+from chat.models import FactoryLine, ProductionMonthlyData
+from chat.monthly_data import is_past_month, is_plan_month
 
 
 @tool
@@ -10,10 +11,10 @@ def fetch_factory_status(product_name: str | None = None) -> str:
     """Fetch the current factory status and production schedule.
 
     Args:
-        product_name: Optional product name filter. Returns all active orders when omitted.
+        product_name: Optional product name filter. Returns all products when omitted.
 
     Returns:
-        JSON string describing factory lines and production orders.
+        JSON string describing factory lines and monthly production data.
     """
     lines = [
         {
@@ -23,28 +24,30 @@ def fetch_factory_status(product_name: str | None = None) -> str:
         for line in FactoryLine.objects.all()
     ]
 
-    orders = ProductionOrder.objects.select_related("product", "line").order_by("scheduled_start")
+    records = ProductionMonthlyData.objects.select_related("product").order_by("month")
     if product_name:
-        orders = orders.filter(product__name__icontains=product_name.strip())
+        records = records.filter(product__name__icontains=product_name.strip())
 
-    order_rows = [
-        {
-            "product": order.product.name,
-            "sku": order.product.sku,
-            "line": order.line.name,
-            "status": order.status,
-            "quantity": order.quantity,
-            "scheduled_start": order.scheduled_start.isoformat(),
-            "estimated_completion": order.estimated_completion.isoformat(),
-        }
-        for order in orders
-    ]
+    production_rows = []
+    for record in records:
+        quantity = record.effective_quantity
+        if quantity is None:
+            continue
+        production_rows.append(
+            {
+                "product": record.product.name,
+                "sku": record.product.sku,
+                "month": record.month.isoformat(),
+                "data_kind": "actual" if is_past_month(record.month) else "plan",
+                "quantity": quantity,
+            }
+        )
 
-    if not lines and not order_rows:
+    if not lines and not production_rows:
         return json.dumps(
             {
                 "lines": [],
-                "production_orders": [],
+                "production": [],
                 "message": "No factory data found.",
             }
         )
@@ -52,7 +55,53 @@ def fetch_factory_status(product_name: str | None = None) -> str:
     return json.dumps(
         {
             "lines": lines,
-            "production_orders": order_rows,
+            "production": production_rows,
         },
         indent=2,
     )
+
+
+@tool
+def fetch_production_monthly_data(product_name: str | None = None, months: int = 12) -> str:
+    """Fetch monthly production data including actual and plan values.
+
+    Past months return actual data; current and future months return plan data.
+
+    Args:
+        product_name: Optional product name filter. Returns all products when omitted.
+        months: Number of recent months to include, up to 30.
+
+    Returns:
+        JSON string of monthly production records.
+    """
+    months = max(1, min(months, 30))
+    records = ProductionMonthlyData.objects.select_related("product").order_by("-month")
+    if product_name:
+        records = records.filter(product__name__icontains=product_name.strip())
+
+    grouped: dict[str, list[dict]] = {}
+    for record in records:
+        product_records = grouped.setdefault(record.product.name, [])
+        if len(product_records) >= months:
+            continue
+        quantity = record.effective_quantity
+        if quantity is None:
+            continue
+        product_records.append(
+            {
+                "month": record.month.isoformat(),
+                "data_kind": "actual" if not is_plan_month(record.month) else "plan",
+                "quantity": quantity,
+                "sku": record.product.sku,
+            }
+        )
+
+    if not grouped:
+        return json.dumps(
+            {
+                "records": [],
+                "message": "No production data found for the requested product.",
+            }
+        )
+
+    return json.dumps({"records": grouped}, indent=2)

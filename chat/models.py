@@ -2,6 +2,13 @@ import uuid
 
 from django.db import models
 
+from chat.monthly_data import (
+    effective_inventory_quantity,
+    effective_production_quantity,
+    effective_sales_units,
+    is_past_month,
+)
+
 
 class Conversation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -38,6 +45,9 @@ class Message(models.Model):
 class Product(models.Model):
     name = models.CharField(max_length=100, unique=True)
     sku = models.CharField(max_length=50, unique=True)
+    reorder_point = models.PositiveIntegerField(default=0)
+    reserved_quantity = models.PositiveIntegerField(default=0)
+    warehouse = models.CharField(max_length=100, default="Main Warehouse")
 
     class Meta:
         ordering = ["name"]
@@ -46,22 +56,93 @@ class Product(models.Model):
         return self.name
 
 
-class SalesRecord(models.Model):
+class SalesMonthlyData(models.Model):
     product = models.ForeignKey(
         Product,
         on_delete=models.CASCADE,
-        related_name="sales_records",
+        related_name="sales_monthly_data",
     )
     month = models.DateField()
-    units_sold = models.PositiveIntegerField()
-    revenue = models.DecimalField(max_digits=12, decimal_places=2)
+    actual_units = models.PositiveIntegerField(null=True, blank=True)
+    actual_revenue = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    plan_units = models.PositiveIntegerField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-month"]
         unique_together = ("product", "month")
 
     def __str__(self) -> str:
-        return f"{self.product.name} ({self.month:%Y-%m})"
+        return f"{self.product.name} sales ({self.month:%Y-%m})"
+
+    @property
+    def data_kind(self) -> str:
+        return "actual" if is_past_month(self.month) else "plan"
+
+    @property
+    def effective_units(self) -> int | None:
+        return effective_sales_units(self.actual_units, self.plan_units, self.month)
+
+
+class InventoryMonthlyData(models.Model):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="inventory_monthly_data",
+    )
+    month = models.DateField()
+    actual_quantity = models.PositiveIntegerField(null=True, blank=True)
+    plan_quantity = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-month"]
+        unique_together = ("product", "month")
+
+    def __str__(self) -> str:
+        return f"{self.product.name} inventory ({self.month:%Y-%m})"
+
+    @property
+    def data_kind(self) -> str:
+        return "actual" if is_past_month(self.month) else "plan"
+
+    @property
+    def effective_quantity(self) -> int | None:
+        return effective_inventory_quantity(
+            self.actual_quantity,
+            self.plan_quantity,
+            self.month,
+        )
+
+
+class ProductionMonthlyData(models.Model):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="production_monthly_data",
+    )
+    month = models.DateField()
+    actual_quantity = models.PositiveIntegerField(null=True, blank=True)
+    plan_quantity = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-month"]
+        unique_together = ("product", "month")
+
+    def __str__(self) -> str:
+        return f"{self.product.name} production ({self.month:%Y-%m})"
+
+    @property
+    def data_kind(self) -> str:
+        return "actual" if is_past_month(self.month) else "plan"
+
+    @property
+    def effective_quantity(self) -> int | None:
+        return effective_production_quantity(
+            self.actual_quantity,
+            self.plan_quantity,
+            self.month,
+        )
 
 
 class FactoryLine(models.Model):
@@ -78,69 +159,3 @@ class FactoryLine(models.Model):
 
     def __str__(self) -> str:
         return self.name
-
-
-class InventoryRecord(models.Model):
-    product = models.OneToOneField(
-        Product,
-        on_delete=models.CASCADE,
-        related_name="inventory",
-    )
-    quantity_on_hand = models.PositiveIntegerField()
-    reserved_quantity = models.PositiveIntegerField(default=0)
-    reorder_point = models.PositiveIntegerField()
-    warehouse = models.CharField(max_length=100, default="Main Warehouse")
-    last_updated = models.DateTimeField()
-
-    class Meta:
-        ordering = ["product__name"]
-
-    def __str__(self) -> str:
-        return f"{self.product.name} ({self.quantity_on_hand} on hand)"
-
-
-class SalesForecast(models.Model):
-    product = models.ForeignKey(
-        Product,
-        on_delete=models.CASCADE,
-        related_name="sales_forecasts",
-    )
-    month = models.DateField()
-    forecast_units = models.PositiveIntegerField()
-    notes = models.TextField(blank=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering = ["month"]
-        unique_together = ("product", "month")
-
-    def __str__(self) -> str:
-        return f"{self.product.name} forecast ({self.month:%Y-%m}): {self.forecast_units}"
-
-
-class ProductionOrder(models.Model):
-    class Status(models.TextChoices):
-        PLANNED = "planned", "Planned"
-        IN_PROGRESS = "in_progress", "In Progress"
-        COMPLETED = "completed", "Completed"
-
-    product = models.ForeignKey(
-        Product,
-        on_delete=models.CASCADE,
-        related_name="production_orders",
-    )
-    line = models.ForeignKey(
-        FactoryLine,
-        on_delete=models.CASCADE,
-        related_name="production_orders",
-    )
-    status = models.CharField(max_length=20, choices=Status.choices)
-    quantity = models.PositiveIntegerField()
-    scheduled_start = models.DateTimeField()
-    estimated_completion = models.DateTimeField()
-
-    class Meta:
-        ordering = ["scheduled_start"]
-
-    def __str__(self) -> str:
-        return f"{self.product.name} on {self.line.name}"

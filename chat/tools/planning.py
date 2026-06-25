@@ -1,10 +1,11 @@
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 from django.db.models import Sum
 from strands import tool
 
-from chat.models import FactoryLine, InventoryRecord, ProductionOrder, Product, SalesForecast
+from chat.models import FactoryLine, InventoryMonthlyData, ProductionMonthlyData, Product, SalesMonthlyData
+from chat.monthly_data import current_month_start, is_plan_month
 
 
 def _parse_month(month: str) -> date:
@@ -18,17 +19,24 @@ def _month_end(month_start: date) -> date:
     return date(month_start.year, month_start.month + 1, 1) - timedelta(days=1)
 
 
+def _latest_inventory_quantity(product: Product) -> int:
+    record = (
+        InventoryMonthlyData.objects.filter(product=product, month__lt=current_month_start())
+        .order_by("-month")
+        .first()
+    )
+    if record is not None and record.actual_quantity is not None:
+        return record.actual_quantity
+    return 0
+
+
 def _incoming_production(product_id: int, through: date) -> int:
-    through_dt = datetime.combine(through, datetime.max.time(), tzinfo=UTC)
     return (
-        ProductionOrder.objects.filter(
+        ProductionMonthlyData.objects.filter(
             product_id=product_id,
-            status__in=[
-                ProductionOrder.Status.PLANNED,
-                ProductionOrder.Status.IN_PROGRESS,
-            ],
-            estimated_completion__lte=through_dt,
-        ).aggregate(total=Sum("quantity"))["total"]
+            month__gte=current_month_start(),
+            month__lte=date(through.year, through.month, 1),
+        ).aggregate(total=Sum("plan_quantity"))["total"]
         or 0
     )
 
@@ -71,17 +79,20 @@ def update_sales_forecast(
     except (ValueError, AttributeError):
         return json.dumps({"error": "month must be in YYYY-MM format."})
 
+    if not is_plan_month(month_start):
+        return json.dumps({"error": "Forecasts can only be set for the current month and future months."})
+
     product = Product.objects.filter(name__iexact=product_name).first()
     if product is None:
         product = Product.objects.filter(name__icontains=product_name).first()
     if product is None:
         return json.dumps({"error": f"No product found matching '{product_name}'."})
 
-    forecast, created = SalesForecast.objects.update_or_create(
+    forecast, created = SalesMonthlyData.objects.update_or_create(
         product=product,
         month=month_start,
         defaults={
-            "forecast_units": forecast_units,
+            "plan_units": forecast_units,
             "notes": notes.strip(),
         },
     )
@@ -93,7 +104,8 @@ def update_sales_forecast(
                 "product": product.name,
                 "sku": product.sku,
                 "month": forecast.month.isoformat(),
-                "forecast_units": forecast.forecast_units,
+                "data_kind": "plan",
+                "forecast_units": forecast.plan_units,
                 "notes": forecast.notes,
                 "updated_at": forecast.updated_at.isoformat(),
             },
@@ -117,11 +129,10 @@ def suggest_production_plan(product_name: str | None = None, months: int = 1) ->
         JSON string with supply gaps and recommended production actions.
     """
     months = max(1, min(months, 6))
-    today = date.today()
 
     forecasts = (
-        SalesForecast.objects.select_related("product")
-        .filter(month__gte=date(today.year, today.month, 1))
+        SalesMonthlyData.objects.select_related("product")
+        .filter(month__gte=current_month_start(), plan_units__isnull=False)
         .order_by("product__name", "month")
     )
     if product_name:
@@ -138,7 +149,7 @@ def suggest_production_plan(product_name: str | None = None, months: int = 1) ->
             }
         )
 
-    grouped: dict[str, list[SalesForecast]] = {}
+    grouped: dict[str, list[SalesMonthlyData]] = {}
     for forecast in forecasts:
         product_forecasts = grouped.setdefault(forecast.product.name, [])
         if len(product_forecasts) >= months:
@@ -148,12 +159,10 @@ def suggest_production_plan(product_name: str | None = None, months: int = 1) ->
     recommendations = []
     for name, product_forecasts in grouped.items():
         product = product_forecasts[0].product
-        inventory = InventoryRecord.objects.filter(product=product).first()
-        available = 0
-        if inventory is not None:
-            available = max(inventory.quantity_on_hand - inventory.reserved_quantity, 0)
+        on_hand = _latest_inventory_quantity(product)
+        available = max(on_hand - product.reserved_quantity, 0)
 
-        forecast_demand = sum(forecast.forecast_units for forecast in product_forecasts)
+        forecast_demand = sum(forecast.plan_units or 0 for forecast in product_forecasts)
         last_month = product_forecasts[-1].month
         incoming = _incoming_production(product.id, _month_end(last_month))
         projected_supply = available + incoming

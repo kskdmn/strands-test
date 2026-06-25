@@ -3,11 +3,11 @@ from django.contrib import admin
 from chat.models import (
     Conversation,
     FactoryLine,
+    InventoryMonthlyData,
     Message,
     Product,
-    ProductionOrder,
-    SalesForecast,
-    SalesRecord,
+    ProductionMonthlyData,
+    SalesMonthlyData,
 )
 
 
@@ -31,13 +31,27 @@ class MessageAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ("name", "sku")
+    list_display = ("name", "sku", "warehouse", "reorder_point", "reserved_quantity")
     search_fields = ("name", "sku")
 
 
-@admin.register(SalesRecord)
-class SalesRecordAdmin(admin.ModelAdmin):
-    list_display = ("product", "month", "units_sold", "revenue")
+@admin.register(SalesMonthlyData)
+class SalesMonthlyDataAdmin(admin.ModelAdmin):
+    list_display = ("product", "month", "actual_units", "plan_units", "updated_at")
+    list_filter = ("month",)
+    search_fields = ("product__name",)
+
+
+@admin.register(InventoryMonthlyData)
+class InventoryMonthlyDataAdmin(admin.ModelAdmin):
+    list_display = ("product", "month", "actual_quantity", "plan_quantity")
+    list_filter = ("month",)
+    search_fields = ("product__name",)
+
+
+@admin.register(ProductionMonthlyData)
+class ProductionMonthlyDataAdmin(admin.ModelAdmin):
+    list_display = ("product", "month", "actual_quantity", "plan_quantity")
     list_filter = ("month",)
     search_fields = ("product__name",)
 
@@ -46,24 +60,3 @@ class SalesRecordAdmin(admin.ModelAdmin):
 class FactoryLineAdmin(admin.ModelAdmin):
     list_display = ("name", "status")
     list_filter = ("status",)
-
-
-@admin.register(SalesForecast)
-class SalesForecastAdmin(admin.ModelAdmin):
-    list_display = ("product", "month", "forecast_units", "updated_at")
-    list_filter = ("month",)
-    search_fields = ("product__name",)
-
-
-@admin.register(ProductionOrder)
-class ProductionOrderAdmin(admin.ModelAdmin):
-    list_display = (
-        "product",
-        "line",
-        "status",
-        "quantity",
-        "scheduled_start",
-        "estimated_completion",
-    )
-    list_filter = ("status", "line")
-    search_fields = ("product__name",)

@@ -3,26 +3,34 @@ import json
 from django.db.models import Exists, OuterRef
 from strands import tool
 
-from chat.models import InventoryRecord, Product, SalesForecast
+from chat.models import InventoryMonthlyData, Product, ProductionMonthlyData, SalesMonthlyData
+from chat.monthly_data import current_month_start
 
 
 def fetch_product_catalog() -> list[dict]:
-    inventory_exists = InventoryRecord.objects.filter(product=OuterRef("pk"))
-    forecast_exists = SalesForecast.objects.filter(product=OuterRef("pk"))
+    sales_exists = SalesMonthlyData.objects.filter(product=OuterRef("pk"))
+    inventory_exists = InventoryMonthlyData.objects.filter(product=OuterRef("pk"))
+    production_exists = ProductionMonthlyData.objects.filter(product=OuterRef("pk"))
+    forecast_exists = SalesMonthlyData.objects.filter(
+        product=OuterRef("pk"),
+        month__gte=current_month_start(),
+        plan_units__isnull=False,
+    )
     products = (
         Product.objects.annotate(
+            has_sales_data=Exists(sales_exists),
             has_inventory_data=Exists(inventory_exists),
+            has_production_data=Exists(production_exists),
             has_forecast_data=Exists(forecast_exists),
         )
-        .prefetch_related("sales_records", "production_orders")
         .order_by("name")
     )
     return [
         {
             "name": product.name,
             "sku": product.sku,
-            "has_sales_data": product.sales_records.exists(),
-            "has_production_data": product.production_orders.exists(),
+            "has_sales_data": product.has_sales_data,
+            "has_production_data": product.has_production_data,
             "has_inventory_data": product.has_inventory_data,
             "has_forecast_data": product.has_forecast_data,
         }

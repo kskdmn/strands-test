@@ -36,18 +36,21 @@ class CatalogTests(TestCase):
 class InventoryTests(TestCase):
     def test_fetch_inventory_status_returns_stock_levels(self):
         import json
-        from datetime import UTC, datetime
+        from datetime import date
 
-        from chat.models import InventoryRecord, Product
+        from chat.models import InventoryMonthlyData, Product
 
-        product = Product.objects.create(name="Widget A", sku="WGT-A")
-        InventoryRecord.objects.create(
-            product=product,
-            quantity_on_hand=250,
+        product = Product.objects.create(
+            name="Widget A",
+            sku="WGT-A",
             reserved_quantity=50,
             reorder_point=100,
             warehouse="Main Warehouse",
-            last_updated=datetime.now(tz=UTC),
+        )
+        InventoryMonthlyData.objects.create(
+            product=product,
+            month=date(2025, 5, 1),
+            actual_quantity=250,
         )
 
         payload = json.loads(fetch_inventory_status(product_name="Widget A"))
@@ -61,10 +64,36 @@ class InventoryTests(TestCase):
 
 
 class PlanningTests(TestCase):
+    def _previous_month_start(self):
+        from datetime import timedelta
+
+        from chat.monthly_data import current_month_start
+
+        return (current_month_start() - timedelta(days=1)).replace(day=1)
+
+    def _create_planning_product(self, *, on_hand: int, reserved: int = 0):
+        from chat.models import FactoryLine, InventoryMonthlyData, Product
+
+        product = Product.objects.create(
+            name="Widget A",
+            sku="WGT-A",
+            reserved_quantity=reserved,
+            reorder_point=50,
+            warehouse="Main Warehouse",
+        )
+        InventoryMonthlyData.objects.create(
+            product=product,
+            month=self._previous_month_start(),
+            actual_quantity=on_hand,
+        )
+        FactoryLine.objects.create(name="Assembly Line 1", status=FactoryLine.Status.RUNNING)
+        return product
+
     def test_update_sales_forecast_creates_record(self):
         import json
+        from datetime import date
 
-        from chat.models import Product, SalesForecast
+        from chat.models import Product, SalesMonthlyData
 
         Product.objects.create(name="Widget A", sku="WGT-A")
         payload = json.loads(
@@ -78,33 +107,54 @@ class PlanningTests(TestCase):
 
         self.assertEqual(payload["action"], "created")
         self.assertEqual(payload["forecast"]["forecast_units"], 1500)
-        self.assertEqual(SalesForecast.objects.count(), 1)
+        self.assertEqual(SalesMonthlyData.objects.count(), 1)
+        record = SalesMonthlyData.objects.get()
+        self.assertEqual(record.month, date(2026, 8, 1))
+        self.assertEqual(record.plan_units, 1500)
 
-    def test_suggest_production_plan_flags_supply_gap(self):
+    def test_suggest_production_plan_recommends_reduction_for_excess_supply(self):
         import json
-        from datetime import UTC, datetime
 
-        from chat.models import FactoryLine, InventoryRecord, Product, SalesForecast
+        from chat.monthly_data import current_month_start
+        from chat.models import ProductionMonthlyData, SalesMonthlyData
 
-        product = Product.objects.create(name="Widget A", sku="WGT-A")
-        InventoryRecord.objects.create(
+        product = self._create_planning_product(on_hand=700)
+        SalesMonthlyData.objects.create(
             product=product,
-            quantity_on_hand=100,
-            reserved_quantity=0,
-            reorder_point=50,
-            warehouse="Main Warehouse",
-            last_updated=datetime.now(tz=UTC),
-        )
-        SalesForecast.objects.create(
-            product=product,
-            month=datetime.now(tz=UTC).date().replace(day=1),
-            forecast_units=500,
+            month=current_month_start(),
+            plan_units=500,
         )
 
         payload = json.loads(suggest_production_plan(product_name="Widget A"))
+
         recommendation = payload["recommendations"][0]
-        self.assertEqual(recommendation["recommended_action"], "increase_production")
-        self.assertGreater(recommendation["supply_gap"], 0)
+        self.assertEqual(recommendation["supply_gap"], -200)
+        self.assertEqual(recommendation["recommended_action"], "reduce_or_delay_production")
+        self.assertIn("Supply exceeds forecast", recommendation["recommendation"])
+        self.assertIsNone(recommendation["suggested_line"])
+        self.assertEqual(ProductionMonthlyData.objects.count(), 0)
+
+    def test_suggest_production_plan_maintains_balanced_plan(self):
+        import json
+
+        from chat.monthly_data import current_month_start
+        from chat.models import ProductionMonthlyData, SalesMonthlyData
+
+        product = self._create_planning_product(on_hand=500)
+        SalesMonthlyData.objects.create(
+            product=product,
+            month=current_month_start(),
+            plan_units=500,
+        )
+
+        payload = json.loads(suggest_production_plan(product_name="Widget A"))
+
+        recommendation = payload["recommendations"][0]
+        self.assertEqual(recommendation["supply_gap"], 0)
+        self.assertEqual(recommendation["recommended_action"], "maintain_current_plan")
+        self.assertIn("match forecast demand", recommendation["recommendation"])
+        self.assertIsNone(recommendation["suggested_line"])
+        self.assertEqual(ProductionMonthlyData.objects.count(), 0)
 
     def test_orchestrator_prompt_mentions_planning_assistant(self):
         prompt = build_orchestrator_system_prompt()
@@ -131,7 +181,7 @@ class ToolFallbackTests(TestCase):
         self.assertEqual(result, "Schedule 200 additional units on Assembly Line 1.")
 
     def test_runs_update_sales_forecast_from_leaked_tool_code(self):
-        from chat.models import Product, SalesForecast
+        from chat.models import Product, SalesMonthlyData
 
         Product.objects.create(name="Widget A", sku="WGT-A")
         leaked = (
@@ -143,4 +193,4 @@ class ToolFallbackTests(TestCase):
         result = resolve_leaked_tool_response(leaked)
 
         self.assertIn("created", result)
-        self.assertEqual(SalesForecast.objects.count(), 1)
+        self.assertEqual(SalesMonthlyData.objects.count(), 1)

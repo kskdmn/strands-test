@@ -1,124 +1,127 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 from decimal import Decimal
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from chat.models import FactoryLine, InventoryRecord, Product, ProductionOrder, SalesForecast, SalesRecord
+from chat.models import (
+    FactoryLine,
+    InventoryMonthlyData,
+    Product,
+    ProductionMonthlyData,
+    SalesMonthlyData,
+)
+from chat.monthly_data import DATA_RANGE_END, DATA_RANGE_START, current_month_start, iter_months
 
 
-def month_offset(reference: date, offset: int) -> date:
-    year = reference.year
-    month = reference.month - offset
-    while month <= 0:
-        month += 12
-        year -= 1
-    return date(year, month, 1)
+def _seasonal_factor(month: date, product_index: int) -> float:
+    seasonal = [0.92, 0.95, 1.0, 1.03, 1.05, 1.08, 1.12, 1.1, 1.02, 0.98, 0.94, 0.9]
+    growth = 1.0 + (product_index * 0.01) + ((month.year - DATA_RANGE_START.year) * 0.04)
+    return seasonal[month.month - 1] * growth
 
 
 class Command(BaseCommand):
-    help = "Load dummy sales and factory data into SQLite."
+    help = "Load dummy monthly sales, inventory, and production data into SQLite."
 
     @transaction.atomic
     def handle(self, *args, **options):
-        SalesRecord.objects.all().delete()
-        SalesForecast.objects.all().delete()
-        ProductionOrder.objects.all().delete()
-        InventoryRecord.objects.all().delete()
+        SalesMonthlyData.objects.all().delete()
+        InventoryMonthlyData.objects.all().delete()
+        ProductionMonthlyData.objects.all().delete()
         FactoryLine.objects.all().delete()
         Product.objects.all().delete()
 
-        products = [
-            Product.objects.create(name="Widget A", sku="WGT-A"),
-            Product.objects.create(name="Widget B", sku="WGT-B"),
-            Product.objects.create(name="Gadget Pro", sku="GAD-PRO"),
+        product_specs = [
+            ("Widget A", "WGT-A", 500, 320, "Main Warehouse", Decimal("24.50"), 900, 1100, 1800),
+            ("Widget B", "WGT-B", 300, 75, "Main Warehouse", Decimal("18.75"), 450, 550, 900),
+            ("Gadget Pro", "GAD-PRO", 150, 40, "East Distribution Center", Decimal("89.00"), 220, 280, 420),
         ]
 
-        base_month = date(2025, 6, 1)
-        sales_templates = {
-            "Widget A": [820, 790, 860, 910, 880, 940, 980, 1020, 990, 1050, 1100, 1150],
-            "Widget B": [430, 410, 450, 470, 460, 490, 505, 520, 515, 530, 545, 560],
-            "Gadget Pro": [210, 205, 220, 235, 230, 245, 260, 275, 270, 290, 305, 320],
-        }
-        unit_prices = {
-            "Widget A": Decimal("24.50"),
-            "Widget B": Decimal("18.75"),
-            "Gadget Pro": Decimal("89.00"),
-        }
+        products = []
+        for index, (name, sku, reorder_point, reserved, warehouse, unit_price, base_sales, base_inventory, base_production) in enumerate(product_specs):
+            products.append(
+                {
+                    "product": Product.objects.create(
+                        name=name,
+                        sku=sku,
+                        reorder_point=reorder_point,
+                        reserved_quantity=reserved,
+                        warehouse=warehouse,
+                    ),
+                    "unit_price": unit_price,
+                    "base_sales": base_sales,
+                    "base_inventory": base_inventory,
+                    "base_production": base_production,
+                    "index": index,
+                }
+            )
 
-        for product in products:
-            for index, units in enumerate(sales_templates[product.name]):
-                month = month_offset(base_month, 11 - index)
-                SalesRecord.objects.create(
-                    product=product,
-                    month=month,
-                    units_sold=units,
-                    revenue=unit_prices[product.name] * units,
+        months = iter_months()
+        current_month = current_month_start()
+
+        for spec in products:
+            product = spec["product"]
+            inventory_level = spec["base_inventory"]
+
+            for month in months:
+                factor = _seasonal_factor(month, spec["index"])
+                sales_units = int(spec["base_sales"] * factor)
+                production_units = int(spec["base_production"] * factor)
+                inventory_level = max(
+                    0,
+                    inventory_level + production_units - sales_units,
                 )
 
-        forecast_month = date(2026, 7, 1)
-        forecast_rows = [
-            ("Widget A", 1400, "Strong summer demand"),
-            ("Widget B", 600, "Steady growth"),
-            ("Gadget Pro", 380, "New marketing campaign"),
-        ]
-        for product_name, units, note in forecast_rows:
-            product = Product.objects.get(name=product_name)
-            SalesForecast.objects.create(
-                product=product,
-                month=forecast_month,
-                forecast_units=units,
-                notes=note,
-            )
+                if month < current_month:
+                    SalesMonthlyData.objects.create(
+                        product=product,
+                        month=month,
+                        actual_units=sales_units,
+                        actual_revenue=spec["unit_price"] * sales_units,
+                    )
+                    InventoryMonthlyData.objects.create(
+                        product=product,
+                        month=month,
+                        actual_quantity=inventory_level,
+                    )
+                    ProductionMonthlyData.objects.create(
+                        product=product,
+                        month=month,
+                        actual_quantity=production_units,
+                    )
+                else:
+                    SalesMonthlyData.objects.create(
+                        product=product,
+                        month=month,
+                        plan_units=sales_units,
+                        notes="Seeded plan" if month == current_month else "",
+                    )
+                    InventoryMonthlyData.objects.create(
+                        product=product,
+                        month=month,
+                        plan_quantity=inventory_level,
+                    )
+                    ProductionMonthlyData.objects.create(
+                        product=product,
+                        month=month,
+                        plan_quantity=production_units,
+                    )
 
-        lines = [
-            FactoryLine.objects.create(name="Assembly Line 1", status=FactoryLine.Status.RUNNING),
-            FactoryLine.objects.create(name="Assembly Line 2", status=FactoryLine.Status.MAINTENANCE),
-            FactoryLine.objects.create(name="Packaging Line", status=FactoryLine.Status.RUNNING),
-        ]
-
-        now = datetime.now(tz=UTC)
-        production_rows = [
-            ("Widget A", lines[0], ProductionOrder.Status.IN_PROGRESS, 1200, now - timedelta(days=2), now + timedelta(days=3)),
-            ("Widget B", lines[2], ProductionOrder.Status.PLANNED, 800, now + timedelta(days=1), now + timedelta(days=6)),
-            ("Gadget Pro", lines[0], ProductionOrder.Status.PLANNED, 450, now + timedelta(days=4), now + timedelta(days=10)),
-            ("Widget A", lines[2], ProductionOrder.Status.PLANNED, 1500, now + timedelta(days=8), now + timedelta(days=14)),
-        ]
-
-        for product_name, line, status, quantity, start, completion in production_rows:
-            product = Product.objects.get(name=product_name)
-            ProductionOrder.objects.create(
-                product=product,
-                line=line,
-                status=status,
-                quantity=quantity,
-                scheduled_start=start,
-                estimated_completion=completion,
-            )
-
-        inventory_rows = [
-            ("Widget A", 1850, 320, 500, "Main Warehouse"),
-            ("Widget B", 420, 75, 300, "Main Warehouse"),
-            ("Gadget Pro", 95, 40, 150, "East Distribution Center"),
-        ]
-        for product_name, on_hand, reserved, reorder_point, warehouse in inventory_rows:
-            product = Product.objects.get(name=product_name)
-            InventoryRecord.objects.create(
-                product=product,
-                quantity_on_hand=on_hand,
-                reserved_quantity=reserved,
-                reorder_point=reorder_point,
-                warehouse=warehouse,
-                last_updated=now,
-            )
+        FactoryLine.objects.bulk_create(
+            [
+                FactoryLine(name="Assembly Line 1", status=FactoryLine.Status.RUNNING),
+                FactoryLine(name="Assembly Line 2", status=FactoryLine.Status.MAINTENANCE),
+                FactoryLine(name="Packaging Line", status=FactoryLine.Status.RUNNING),
+            ]
+        )
 
         self.stdout.write(
             self.style.SUCCESS(
                 f"Seeded {Product.objects.count()} products, "
-                f"{SalesRecord.objects.count()} sales records, "
-                f"{SalesForecast.objects.count()} sales forecasts, "
-                f"{FactoryLine.objects.count()} factory lines, "
-                f"{ProductionOrder.objects.count()} production orders, and "
-                f"{InventoryRecord.objects.count()} inventory records."
+                f"{SalesMonthlyData.objects.count()} sales monthly records, "
+                f"{InventoryMonthlyData.objects.count()} inventory monthly records, "
+                f"{ProductionMonthlyData.objects.count()} production monthly records, and "
+                f"{FactoryLine.objects.count()} factory lines "
+                f"from {DATA_RANGE_START.isoformat()} to {DATA_RANGE_END.isoformat()}."
             )
         )
