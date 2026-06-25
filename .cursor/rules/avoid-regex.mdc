@@ -1,0 +1,24 @@
+---
+description: Avoid regex for parsing natural-language text
+alwaysApply: true
+---
+
+# Avoid Regular Expressions
+
+Do not use regular expressions (`re`, `re.compile`, etc.) for parsing user queries, workflow inputs, or other natural-language text.
+
+Prefer flexible string scanning instead: `str.find`, slicing, whitespace splitting, `json.loads`, and `ast.literal_eval`.
+
+## Examples
+
+```python
+# ❌ BAD — regex for query parsing
+FORECAST_UNITS = re.compile(r"\b(\d[\d,]*)\s+units?\b", re.IGNORECASE)
+
+# ✅ GOOD — scan for "unit"/"units" and read the preceding number
+def _parse_forecast_units(content: str) -> int | None:
+    lowered = content.lower()
+    for suffix in ("units", "unit"):
+        position = lowered.find(suffix, start)
+        # ... scan backwards for digits
+```

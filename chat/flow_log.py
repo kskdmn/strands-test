@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from typing import Any
 from uuid import UUID
 
+from django.conf import settings
 from strands.hooks import (
     AfterInvocationEvent,
     AfterModelCallEvent,
@@ -43,19 +44,40 @@ def _agent_name(agent: Any) -> str:
 
 
 def _truncate(text: str, limit: int = 200) -> str:
-    if len(text) <= limit:
+    if limit <= 0 or len(text) <= limit:
         return text
     return f"{text[:limit]}..."
+
+
+def _log_limit(setting_name: str, default: int) -> int:
+    return int(getattr(settings, setting_name, default))
+
+
+def _format_json_payload(payload: Any) -> str:
+    try:
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+    except TypeError:
+        return str(payload)
+
+
+def _format_text_payload(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            return _format_json_payload(json.loads(stripped))
+        except json.JSONDecodeError:
+            pass
+    return text
 
 
 def _format_tool_input(tool_use: dict[str, Any] | None) -> str:
     if not tool_use:
         return ""
     try:
-        payload = json.dumps(tool_use.get("input", {}), ensure_ascii=False)
+        payload = json.dumps(tool_use.get("input", {}), ensure_ascii=False, indent=2)
     except TypeError:
         payload = str(tool_use.get("input", {}))
-    return _truncate(payload)
+    return _truncate(payload, _log_limit("FLOW_LOG_TOOL_INPUT_LIMIT", 1000))
 
 
 def _format_tool_result(result: dict[str, Any] | None) -> str:
@@ -66,15 +88,13 @@ def _format_tool_result(result: dict[str, Any] | None) -> str:
     chunks: list[str] = []
     for block in result.get("content", []):
         if "text" in block:
-            chunks.append(block["text"])
+            chunks.append(_format_text_payload(block["text"]))
         elif "json" in block:
-            try:
-                chunks.append(json.dumps(block["json"], ensure_ascii=False))
-            except TypeError:
-                chunks.append(str(block["json"]))
+            chunks.append(_format_json_payload(block["json"]))
 
-    summary = " ".join(chunks) if chunks else "(empty)"
-    return f"status={status} {_truncate(summary)}"
+    summary = "\n".join(chunks) if chunks else "(empty)"
+    limit = _log_limit("FLOW_LOG_TOOL_RESULT_LIMIT", 4000)
+    return f"status={status}\n{_truncate(summary, limit)}"
 
 
 def log_request_start(conversation_id: UUID, content: str) -> None:
@@ -85,15 +105,6 @@ def log_request_start(conversation_id: UUID, content: str) -> None:
 def log_request_end() -> None:
     logger.info("%sREQUEST done", _conv_prefix())
     set_flow_context(None)
-
-
-def log_direct_tool(tool_name: str, detail: str = "") -> None:
-    suffix = f" ({detail})" if detail else ""
-    logger.info("%sTOOL %s [direct]%s", _conv_prefix(), tool_name, suffix)
-
-
-def log_tool_fallback(tool_name: str) -> None:
-    logger.info("%sFALLBACK leaked tool_code -> %s", _conv_prefix(), tool_name)
 
 
 def log_agent_cache_reset(conversation_id: UUID) -> None:

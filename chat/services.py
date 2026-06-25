@@ -10,7 +10,6 @@ from chat.tools.time import current_time
 
 from chat.agents.subagents import (
     inventory_assistant,
-    planning_assistant,
     production_schedule_assistant,
     sales_forecast_assistant,
 )
@@ -18,7 +17,6 @@ from chat.flow_log import FLOW_LOG_HOOKS, log_request_end, log_request_start
 from chat.message_parts import build_assistant_parts
 from chat.models import Conversation, Message
 from chat.prompts import build_orchestrator_system_prompt
-from chat.tool_fallback import resolve_leaked_tool_response
 
 
 class ChatService:
@@ -32,7 +30,6 @@ class ChatService:
             sales_forecast_assistant,
             production_schedule_assistant,
             inventory_assistant,
-            planning_assistant,
         ]
 
     def create_conversation(self) -> Conversation:
@@ -59,13 +56,6 @@ class ChatService:
                 result,
                 raw_text,
             )
-            resolved_text = resolve_leaked_tool_response(final_text)
-            if resolved_text != final_text:
-                if thinking_text:
-                    thinking_text = f"{thinking_text}\n\n{final_text}".strip()
-                else:
-                    thinking_text = final_text
-                final_text = resolved_text
 
             user_message = Message.objects.create(
                 conversation=conversation,

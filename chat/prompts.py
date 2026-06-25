@@ -20,14 +20,6 @@ Never print tool calls as code blocks — always invoke tools through the tool i
 - User asks about inventory, stock levels, availability, reorder status, or warehouse quantities
   -> call inventory_assistant with the user's full question as query
 
-### Forecast updates and production planning
-- User asks to update, change, or set a sales forecast, OR asks for a production plan to meet forecast demand
-  -> call planning_assistant with the user's full question as query
-- For a combined request (update forecast + suggest production plan), call planning_assistant once
-  with the full user message — do NOT split across production_schedule_assistant
-- Do NOT use production_schedule_assistant to create or revise plans from forecast changes;
-  it only reads the current schedule
-
 ### Other
 - User asks for the current date or time
   -> call current_time

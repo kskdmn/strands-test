@@ -119,10 +119,14 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CHAT_MODEL_ID = "google.gemma-3-27b-it"
+CHAT_MODEL_ID = "zai.glm-5"
 
 # None = detect from the server OS timezone (for example, Asia/Tokyo in Japan).
 CHAT_LOCAL_TIMEZONE = None
+
+# Max characters logged for flow-log tool payloads (0 = no limit).
+FLOW_LOG_TOOL_INPUT_LIMIT = 1000
+FLOW_LOG_TOOL_RESULT_LIMIT = 4000
 
 LOGGING = {
     "version": 1,

@@ -4,7 +4,6 @@ from django.test import TestCase
 
 from chat.message_parts import build_assistant_parts, split_turn_messages
 from chat.prompts import build_orchestrator_system_prompt
-from chat.tool_fallback import resolve_leaked_tool_response
 from chat.tools.catalog import fetch_product_catalog, format_product_catalog
 from chat.tools.inventory import fetch_inventory_status
 from chat.tools.planning import suggest_production_plan, update_sales_forecast
@@ -100,7 +99,8 @@ class PlanningTests(TestCase):
         payload = json.loads(
             update_sales_forecast(
                 product_name="Widget A",
-                month="2026-08",
+                year=2026,
+                month="August",
                 forecast_units=1500,
                 notes="Promo lift",
             )
@@ -112,6 +112,40 @@ class PlanningTests(TestCase):
         record = SalesMonthlyData.objects.get()
         self.assertEqual(record.month, date(2026, 8, 1))
         self.assertEqual(record.plan_units, 1500)
+
+    def test_update_sales_forecast_accepts_flexible_month_formats(self):
+        import json
+        from datetime import date
+
+        from chat.models import Product, SalesMonthlyData
+
+        Product.objects.create(name="Widget A", sku="WGT-A")
+        cases = [
+            ("8", 2026, date(2026, 8, 1)),
+            ("08", 2026, date(2026, 8, 1)),
+            ("Aug", 2026, date(2026, 8, 1)),
+            ("August", 2026, date(2026, 8, 1)),
+            (8, 2026, date(2026, 8, 1)),
+            ("1", 2027, date(2027, 1, 1)),
+            ("01", 2027, date(2027, 1, 1)),
+            ("Jan", 2027, date(2027, 1, 1)),
+            ("January", 2027, date(2027, 1, 1)),
+        ]
+
+        for month_value, year_value, expected_month in cases:
+            with self.subTest(month=month_value, year=year_value):
+                SalesMonthlyData.objects.all().delete()
+                payload = json.loads(
+                    update_sales_forecast(
+                        product_name="Widget A",
+                        year=year_value,
+                        month=month_value,
+                        forecast_units=100,
+                    )
+                )
+                self.assertEqual(payload["action"], "created")
+                record = SalesMonthlyData.objects.get()
+                self.assertEqual(record.month, expected_month)
 
     def test_suggest_production_plan_recommends_reduction_for_excess_supply(self):
         import json
@@ -157,91 +191,6 @@ class PlanningTests(TestCase):
         self.assertIsNone(recommendation["suggested_line"])
         self.assertEqual(ProductionMonthlyData.objects.count(), 0)
 
-    def test_orchestrator_prompt_mentions_planning_assistant(self):
-        prompt = build_orchestrator_system_prompt()
-        self.assertIn("planning_assistant", prompt)
-        self.assertIn("Do NOT use production_schedule_assistant", prompt)
-
-
-class PlanningWorkflowTests(TestCase):
-    def test_run_planning_workflow_updates_forecast_and_suggests_plan(self):
-        from datetime import date, timedelta
-
-        from chat.monthly_data import current_month_start
-        from chat.models import (
-            FactoryLine,
-            InventoryMonthlyData,
-            Product,
-            ProductionMonthlyData,
-            SalesMonthlyData,
-        )
-        from chat.planning_workflow import run_planning_workflow
-
-        product = Product.objects.create(name="Widget A", sku="WGT-A")
-        previous_month = (current_month_start() - timedelta(days=1)).replace(day=1)
-        InventoryMonthlyData.objects.create(
-            product=product,
-            month=previous_month,
-            actual_quantity=500,
-        )
-        ProductionMonthlyData.objects.create(
-            product=product,
-            month=date(2026, 8, 1),
-            plan_quantity=800,
-        )
-        FactoryLine.objects.create(name="Assembly Line 1", status=FactoryLine.Status.RUNNING)
-        query = (
-            "Update Widget A forecast to 1500 units for August 2026 "
-            "and suggest a production plan."
-        )
-
-        result = run_planning_workflow(query)
-
-        self.assertIsNotNone(result)
-        assert result is not None
-        self.assertIn("Forecast updated: Widget A for August 2026 to 1500 units.", result)
-        self.assertIn(
-            "Production plan: schedule 200 additional units on Assembly Line 1.",
-            result,
-        )
-        self.assertNotIn("```python", result)
-        forecast = SalesMonthlyData.objects.get(product=product, month=date(2026, 8, 1))
-        self.assertEqual(forecast.plan_units, 1500)
-
-
-class PlanningAssistantTests(TestCase):
-    def test_planning_assistant_uses_workflow_for_structured_request(self):
-        from datetime import date, timedelta
-
-        from chat.agents import subagents
-        from chat.monthly_data import current_month_start
-        from chat.models import FactoryLine, InventoryMonthlyData, Product, ProductionMonthlyData
-
-        product = Product.objects.create(name="Widget A", sku="WGT-A")
-        previous_month = (current_month_start() - timedelta(days=1)).replace(day=1)
-        InventoryMonthlyData.objects.create(
-            product=product,
-            month=previous_month,
-            actual_quantity=500,
-        )
-        ProductionMonthlyData.objects.create(
-            product=product,
-            month=date(2026, 8, 1),
-            plan_quantity=800,
-        )
-        FactoryLine.objects.create(name="Assembly Line 1", status=FactoryLine.Status.RUNNING)
-        query = (
-            "Update Widget A forecast to 1500 units for August 2026 "
-            "and suggest a production plan."
-        )
-
-        with patch("chat.agents.subagents.Agent") as mock_agent:
-            result = subagents.planning_assistant(query=query)
-
-        mock_agent.assert_not_called()
-        self.assertIn("Forecast updated: Widget A for August 2026 to 1500 units.", result)
-        self.assertNotIn("```python", result)
-
 
 class MessagePartsTests(TestCase):
     def test_split_turn_messages_treats_tool_use_as_thinking(self):
@@ -249,8 +198,8 @@ class MessagePartsTests(TestCase):
             {
                 "role": "assistant",
                 "content": [
-                    {"text": "I'll check planning details."},
-                    {"toolUse": {"name": "planning_assistant", "input": {"query": "Plan Widget A"}}},
+                    {"text": "I'll check inventory details."},
+                    {"toolUse": {"name": "inventory_assistant", "input": {"query": "Stock for Widget A"}}},
                 ],
             },
             {
@@ -259,23 +208,23 @@ class MessagePartsTests(TestCase):
                     {
                         "toolResult": {
                             "status": "success",
-                            "content": [{"text": "Forecast updated. Build 200 units."}],
+                            "content": [{"text": "500 units available."}],
                         }
                     }
                 ],
             },
             {
                 "role": "assistant",
-                "content": [{"text": "Forecast updated. Build 200 units on Line 1."}],
+                "content": [{"text": "Widget A has 500 units available."}],
             },
         ]
 
         thinking, final_answer = split_turn_messages(new_messages)
 
-        self.assertIn("I'll check planning details.", thinking)
-        self.assertIn("planning_assistant", thinking)
-        self.assertIn("Forecast updated. Build 200 units.", thinking)
-        self.assertEqual(final_answer, "Forecast updated. Build 200 units on Line 1.")
+        self.assertIn("I'll check inventory details.", thinking)
+        self.assertIn("inventory_assistant", thinking)
+        self.assertIn("500 units available.", thinking)
+        self.assertEqual(final_answer, "Widget A has 500 units available.")
 
     def test_build_assistant_parts_keeps_unstructured_blob_as_final_answer(self):
         from types import SimpleNamespace
@@ -302,21 +251,21 @@ class MessagePartsTests(TestCase):
 
 
 class ChatServiceTests(TestCase):
-    def test_combined_forecast_plan_request_routes_through_orchestrator(self):
+    def test_send_message_stores_user_and_assistant_messages(self):
         from chat.models import Conversation
         from chat.services import ChatService
 
         conversation = Conversation.objects.create()
-        content = "Update Widget A forecast to 1500 units for August 2026 and suggest a production plan."
+        content = "What is the current inventory for Widget A?"
         mock_agent = MagicMock()
         mock_agent.messages = []
         mock_result = MagicMock()
         mock_result.message = {
             "role": "assistant",
-            "content": [{"text": "Forecast updated. Production plan suggested."}],
+            "content": [{"text": "Widget A has 500 units available."}],
         }
         mock_result.__str__ = MagicMock(
-            return_value="Forecast updated. Production plan suggested.",
+            return_value="Widget A has 500 units available.",
         )
         mock_agent.return_value = mock_result
 
@@ -327,57 +276,5 @@ class ChatServiceTests(TestCase):
         mock_get_agent.assert_called_once_with(conversation.id)
         mock_agent.assert_called_once()
         self.assertEqual(user_message.content, content)
-        self.assertEqual(assistant_message.content, "Forecast updated. Production plan suggested.")
+        self.assertEqual(assistant_message.content, "Widget A has 500 units available.")
         self.assertEqual(assistant_message.thinking, "")
-
-
-class ToolFallbackTests(TestCase):
-    def test_runs_json_tool_code_block_through_planning_assistant(self):
-        leaked = (
-            "```tool_code\n"
-            "{\n"
-            '  "tool": "planning_assistant",\n'
-            '  "query": "Update Widget A forecast to 1500 units for August 2026 and suggest a production plan."\n'
-            "}\n"
-            "```"
-        )
-        with patch("chat.tool_fallback.planning_assistant") as mock_planning:
-            mock_planning.return_value = "Forecast updated. Build 200 units on Assembly Line 1."
-            result = resolve_leaked_tool_response(leaked)
-
-        mock_planning.assert_called_once_with(
-            query="Update Widget A forecast to 1500 units for August 2026 and suggest a production plan."
-        )
-        self.assertEqual(result, "Forecast updated. Build 200 units on Assembly Line 1.")
-
-    def test_redirects_production_schedule_leak_to_planning_assistant(self):
-        leaked = (
-            "Okay, I've updated the forecast.\n\n"
-            "```tool_code\n"
-            'production_schedule_assistant(query="Suggest a production plan for Widget A '
-            'to meet a sales forecast of 1500 units in August 2026.")\n'
-            "```"
-        )
-        with patch("chat.tool_fallback.planning_assistant") as mock_planning:
-            mock_planning.return_value = "Schedule 200 additional units on Assembly Line 1."
-            result = resolve_leaked_tool_response(leaked)
-
-        mock_planning.assert_called_once_with(
-            query="Suggest a production plan for Widget A to meet a sales forecast of 1500 units in August 2026."
-        )
-        self.assertEqual(result, "Schedule 200 additional units on Assembly Line 1.")
-
-    def test_runs_update_sales_forecast_from_leaked_tool_code(self):
-        from chat.models import Product, SalesMonthlyData
-
-        Product.objects.create(name="Widget A", sku="WGT-A")
-        leaked = (
-            "```tool_code\n"
-            'update_sales_forecast(product_name="Widget A", month="2026-08", forecast_units=1500)\n'
-            "```"
-        )
-
-        result = resolve_leaked_tool_response(leaked)
-
-        self.assertIn("created", result)
-        self.assertEqual(SalesMonthlyData.objects.count(), 1)
