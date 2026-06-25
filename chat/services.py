@@ -15,6 +15,7 @@ from chat.agents.subagents import (
     sales_forecast_assistant,
 )
 from chat.flow_log import FLOW_LOG_HOOKS, log_request_end, log_request_start
+from chat.message_parts import build_assistant_parts
 from chat.models import Conversation, Message
 from chat.prompts import build_orchestrator_system_prompt
 from chat.tool_fallback import resolve_leaked_tool_response
@@ -46,11 +47,25 @@ class ChatService:
             conversation = Conversation.objects.get(id=conversation_id)
             agent = self._get_agent(conversation_id)
             agent.system_prompt = build_orchestrator_system_prompt()
-            response = agent(
+            messages_before = len(agent.messages)
+            result = agent(
                 content,
                 invocation_state={"conversation_id": str(conversation_id)},
             )
-            assistant_text = resolve_leaked_tool_response(str(response))
+            raw_text = str(result)
+            thinking_text, final_text = build_assistant_parts(
+                agent,
+                messages_before,
+                result,
+                raw_text,
+            )
+            resolved_text = resolve_leaked_tool_response(final_text)
+            if resolved_text != final_text:
+                if thinking_text:
+                    thinking_text = f"{thinking_text}\n\n{final_text}".strip()
+                else:
+                    thinking_text = final_text
+                final_text = resolved_text
 
             user_message = Message.objects.create(
                 conversation=conversation,
@@ -60,7 +75,8 @@ class ChatService:
             assistant_message = Message.objects.create(
                 conversation=conversation,
                 role=Message.Role.ASSISTANT,
-                content=assistant_text,
+                content=final_text,
+                thinking=thinking_text,
             )
             return user_message, assistant_message
         finally:

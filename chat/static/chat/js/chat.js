@@ -43,6 +43,15 @@ function renderMessage(role, content, options = {}) {
   }
 
   node.querySelector(".message-meta").textContent = role;
+
+  const thinkingNode = node.querySelector(".message-thinking");
+  const thinkingContent = options.thinking?.trim();
+  if (thinkingContent) {
+    thinkingNode.querySelector(".message-thinking-content").textContent = thinkingContent;
+  } else {
+    thinkingNode.remove();
+  }
+
   node.querySelector(".message-content").textContent = content;
   messageList.appendChild(node);
   messageList.scrollTop = messageList.scrollHeight;
@@ -93,7 +102,7 @@ async function loadConversation() {
 
     messageList.innerHTML = "";
     payload.messages.forEach((message) => {
-      renderMessage(message.role, message.content);
+      renderMessage(message.role, message.content, { thinking: message.thinking });
     });
   } catch (error) {
     clearConversationId();
@@ -120,7 +129,9 @@ async function sendMessage(content) {
 
     pendingNode.remove();
     const assistantMessage = payload.messages.find((message) => message.role === "assistant");
-    renderMessage("assistant", assistantMessage.content);
+    renderMessage(assistantMessage.role, assistantMessage.content, {
+      thinking: assistantMessage.thinking,
+    });
   } catch (error) {
     pendingNode.classList.remove("pending");
     pendingNode.classList.add("error");

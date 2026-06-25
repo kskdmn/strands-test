@@ -2,6 +2,7 @@ from django.conf import settings
 from strands import Agent, tool
 
 from chat.flow_log import FLOW_LOG_HOOKS
+from chat.planning_workflow import run_planning_workflow
 from chat.tools.factory import fetch_factory_status
 from chat.tools.inventory import fetch_inventory_status
 from chat.tools.planning import suggest_production_plan, update_sales_forecast
@@ -102,20 +103,29 @@ def planning_assistant(query: str) -> str:
     Returns:
         Confirmation of forecast updates and recommended production actions.
     """
+    workflow_result = run_planning_workflow(query)
+    if workflow_result is not None:
+        return workflow_result
+
     agent = Agent(
         model=settings.CHAT_MODEL_ID,
         name="planning",
         system_prompt=(
             "You are a demand and production planning specialist. "
+            "Always call the provided tools. Never write Python code, pseudocode, or simulated classes. "
             "When the user provides new forecast numbers, call update_sales_forecast "
             "for each product and month they mention. "
             "After forecasts are saved, call suggest_production_plan to compare demand "
             "against inventory and incoming production. "
-            "Summarize the recommended production changes clearly, including quantities "
+            "Use fetch_inventory_status or fetch_factory_status only when extra detail is needed. "
+            "Recommendations are advisory only. Do not create or update production orders. "
+            "Summarize the recommended production changes clearly in plain language, including quantities "
             "and which line to use when a gap exists."
         ),
         tools=[update_sales_forecast, suggest_production_plan, fetch_inventory_status, fetch_factory_status],
         hooks=[FLOW_LOG_HOOKS],
         callback_handler=None,
     )
-    return str(agent(query))
+    from chat.tool_fallback import resolve_leaked_tool_response
+
+    return resolve_leaked_tool_response(str(agent(query)))

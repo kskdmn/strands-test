@@ -104,10 +104,11 @@ flowchart TB
 1. The user sends a message from the chat UI to the Django API.
 2. `ChatService` loads or creates the conversation's cached orchestrator, rebuilds its system prompt with the current product catalog, and sends the user message to Strands.
 3. The orchestrator follows the prompt routing rules: product catalog, sales, production schedule, inventory, planning, time, or direct general conversation.
-4. Specialist subagents call their database-backed tools. Planning requests update `SalesMonthlyData.plan_units` when the user changes forecasts, then compare forecast demand with inventory and incoming production. Recommendations are advisory; they do not create production plan rows.
+4. Specialist subagents call their database-backed tools. For planning requests, `planning_assistant` runs `update_sales_forecast` and `suggest_production_plan` directly when the query includes a product, month, and forecast or plan intent; otherwise it falls back to the planning LLM subagent.
 5. Every request, agent invocation, model call, and tool call is logged through `FLOW_LOG_HOOKS` with the conversation ID.
-6. If the model prints a JSON or Python-style tool call instead of invoking it, `resolve_leaked_tool_response` runs the equivalent local tool. Forecast-driven production leaks are redirected to `planning_assistant`.
-7. The final assistant text is stored with the user message and returned through the API to the chat UI.
+6. If the model prints a JSON or Python-style tool call instead of invoking it, `resolve_leaked_tool_response` runs the equivalent local tool on the final answer text. The pre-resolution text is appended to `thinking`.
+7. Assistant messages derive `thinking` from orchestrator tool calls and tool results during the turn; the last plain assistant reply is the final answer.
+8. The final assistant text is stored with the user message and returned through the API to the chat UI.
 
 ## Setup
 

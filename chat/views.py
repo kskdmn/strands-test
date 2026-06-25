@@ -32,6 +32,7 @@ def list_messages(request: HttpRequest, conversation_id: UUID) -> JsonResponse:
                     "id": message.id,
                     "role": message.role,
                     "content": message.content,
+                    "thinking": message.thinking,
                     "created_at": message.created_at.isoformat(),
                 }
                 for message in messages
@@ -73,6 +74,7 @@ def send_message(request: HttpRequest, conversation_id: UUID) -> JsonResponse:
                     "id": assistant_message.id,
                     "role": assistant_message.role,
                     "content": assistant_message.content,
+                    "thinking": assistant_message.thinking,
                     "created_at": assistant_message.created_at.isoformat(),
                 },
             ],

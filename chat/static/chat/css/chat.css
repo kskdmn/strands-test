@@ -121,6 +121,45 @@ body {
   line-height: 1.5;
 }
 
+.message-thinking {
+  margin-bottom: 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: rgba(15, 20, 25, 0.55);
+}
+
+.message-thinking > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.message-thinking > summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-thinking > summary::before {
+  content: "▸ ";
+}
+
+.message-thinking[open] > summary::before {
+  content: "▾ ";
+}
+
+.message-thinking-content {
+  padding: 0 12px 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  line-height: 1.45;
+  font-size: 0.92rem;
+  border-top: 1px solid var(--panel-border);
+}
+
 .message.pending .message-content {
   color: var(--muted);
   font-style: italic;
