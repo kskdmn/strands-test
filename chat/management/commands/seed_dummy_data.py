@@ -1,6 +1,9 @@
+import csv
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
@@ -11,83 +14,127 @@ from chat.models import (
     ProductionMonthlyData,
     SalesMonthlyData,
 )
-from chat.monthly_data import DATA_RANGE_END, DATA_RANGE_START, current_month_start, iter_months
+from chat.monthly_data import current_month_start
+
+MONTH_ABBREV = {
+    "Jan": 1,
+    "Feb": 2,
+    "Mar": 3,
+    "Apr": 4,
+    "May": 5,
+    "Jun": 6,
+    "Jul": 7,
+    "Aug": 8,
+    "Sep": 9,
+    "Oct": 10,
+    "Nov": 11,
+    "Dec": 12,
+}
+
+PRODUCT_SPECS = {
+    "Widget A": ("WGT-A", 500, 320, "Main Warehouse", Decimal("24.50")),
+    "Widget B": ("WGT-B", 300, 75, "Main Warehouse", Decimal("18.75")),
+    "Gadget Pro": ("GAD-PRO", 150, 40, "East Distribution Center", Decimal("89.00")),
+}
 
 
-def _seasonal_factor(month: date, product_index: int) -> float:
-    seasonal = [0.92, 0.95, 1.0, 1.03, 1.05, 1.08, 1.12, 1.1, 1.02, 0.98, 0.94, 0.9]
-    growth = 1.0 + (product_index * 0.01) + ((month.year - DATA_RANGE_START.year) * 0.04)
-    return seasonal[month.month - 1] * growth
+def _parse_month_label(label: str) -> date:
+    year_part, month_part = label.strip().split("-", 1)
+    return date(2000 + int(year_part), MONTH_ABBREV[month_part], 1)
+
+
+def _parse_int_cells(cells: list[str]) -> list[int]:
+    return [int(cell) for cell in cells if cell.strip()]
+
+
+def load_psi_csv(path: Path) -> dict[str, dict[date, dict[str, int]]]:
+    products: dict[str, dict[date, dict[str, int]]] = {}
+    current_product: str | None = None
+    current_months: list[date] = []
+
+    with path.open(newline="") as handle:
+        reader = csv.reader(handle)
+        for row in reader:
+            if not row or not row[0].strip():
+                continue
+
+            label = row[0].strip()
+            if label.startswith("Product Name:"):
+                current_product = label.split(":", 1)[1].strip()
+                products[current_product] = {}
+                current_months = []
+                continue
+
+            if current_product is None:
+                continue
+
+            if label == "Month":
+                current_months = [_parse_month_label(cell) for cell in row[1:] if cell.strip()]
+                continue
+
+            if label not in {"Production", "Sales", "Inventory"} or not current_months:
+                continue
+
+            values = _parse_int_cells(row[1:])
+            product_data = products[current_product]
+            for month, value in zip(current_months, values, strict=True):
+                product_data.setdefault(month, {})
+                product_data[month][label.lower()] = value
+
+    return products
 
 
 class Command(BaseCommand):
-    help = "Load dummy monthly sales, inventory, and production data into SQLite."
+    help = "Load monthly sales, inventory, and production data from docs/dummy_psi.csv."
 
     @transaction.atomic
     def handle(self, *args, **options):
+        psi_path = Path(settings.BASE_DIR) / "docs" / "dummy_psi.csv"
+        psi_data = load_psi_csv(psi_path)
+
         SalesMonthlyData.objects.all().delete()
         InventoryMonthlyData.objects.all().delete()
         ProductionMonthlyData.objects.all().delete()
         FactoryLine.objects.all().delete()
         Product.objects.all().delete()
 
-        product_specs = [
-            ("Widget A", "WGT-A", 500, 320, "Main Warehouse", Decimal("24.50"), 900, 1100, 1800),
-            ("Widget B", "WGT-B", 300, 75, "Main Warehouse", Decimal("18.75"), 450, 550, 900),
-            ("Gadget Pro", "GAD-PRO", 150, 40, "East Distribution Center", Decimal("89.00"), 220, 280, 420),
-        ]
-
-        products = []
-        for index, (name, sku, reorder_point, reserved, warehouse, unit_price, base_sales, base_inventory, base_production) in enumerate(product_specs):
-            products.append(
-                {
-                    "product": Product.objects.create(
-                        name=name,
-                        sku=sku,
-                        reorder_point=reorder_point,
-                        reserved_quantity=reserved,
-                        warehouse=warehouse,
-                    ),
-                    "unit_price": unit_price,
-                    "base_sales": base_sales,
-                    "base_inventory": base_inventory,
-                    "base_production": base_production,
-                    "index": index,
-                }
-            )
-
-        months = iter_months()
         current_month = current_month_start()
 
-        for spec in products:
-            product = spec["product"]
-            inventory_level = spec["base_inventory"]
+        for product_name, monthly_values in psi_data.items():
+            if product_name not in PRODUCT_SPECS:
+                raise ValueError(f"Unknown product in {psi_path.name}: {product_name}")
 
-            for month in months:
-                factor = _seasonal_factor(month, spec["index"])
-                sales_units = int(spec["base_sales"] * factor)
-                production_units = int(spec["base_production"] * factor)
-                inventory_level = max(
-                    0,
-                    inventory_level + production_units - sales_units,
-                )
+            sku, reorder_point, reserved, warehouse, unit_price = PRODUCT_SPECS[product_name]
+            product = Product.objects.create(
+                name=product_name,
+                sku=sku,
+                reorder_point=reorder_point,
+                reserved_quantity=reserved,
+                warehouse=warehouse,
+            )
+
+            for month in sorted(monthly_values):
+                values = monthly_values[month]
+                sales_units = values["sales"]
+                inventory_quantity = values["inventory"]
+                production_quantity = values["production"]
 
                 if month < current_month:
                     SalesMonthlyData.objects.create(
                         product=product,
                         month=month,
                         actual_units=sales_units,
-                        actual_revenue=spec["unit_price"] * sales_units,
+                        actual_revenue=unit_price * sales_units,
                     )
                     InventoryMonthlyData.objects.create(
                         product=product,
                         month=month,
-                        actual_quantity=inventory_level,
+                        actual_quantity=inventory_quantity,
                     )
                     ProductionMonthlyData.objects.create(
                         product=product,
                         month=month,
-                        actual_quantity=production_units,
+                        actual_quantity=production_quantity,
                     )
                 else:
                     SalesMonthlyData.objects.create(
@@ -99,12 +146,12 @@ class Command(BaseCommand):
                     InventoryMonthlyData.objects.create(
                         product=product,
                         month=month,
-                        plan_quantity=inventory_level,
+                        plan_quantity=inventory_quantity,
                     )
                     ProductionMonthlyData.objects.create(
                         product=product,
                         month=month,
-                        plan_quantity=production_units,
+                        plan_quantity=production_quantity,
                     )
 
         FactoryLine.objects.bulk_create(
@@ -121,7 +168,6 @@ class Command(BaseCommand):
                 f"{SalesMonthlyData.objects.count()} sales monthly records, "
                 f"{InventoryMonthlyData.objects.count()} inventory monthly records, "
                 f"{ProductionMonthlyData.objects.count()} production monthly records, and "
-                f"{FactoryLine.objects.count()} factory lines "
-                f"from {DATA_RANGE_START.isoformat()} to {DATA_RANGE_END.isoformat()}."
+                f"{FactoryLine.objects.count()} factory lines from {psi_path.name}."
             )
         )
