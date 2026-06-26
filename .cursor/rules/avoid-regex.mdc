@@ -7,7 +7,9 @@ alwaysApply: true
 
 Do not use regular expressions (`re`, `re.compile`, etc.) for parsing user queries, workflow inputs, or other natural-language text.
 
-Prefer flexible string scanning instead: `str.find`, slicing, whitespace splitting, `json.loads`, and `ast.literal_eval`.
+Prefer structured parsing instead: tool arguments, `json.loads`, `ast.literal_eval`, digit checks, and delimiter-based splitting (`"-"`, whitespace).
+
+Do not scan free-form text for arbitrary words or phrases (e.g. `"unit"`, `"forecast"`, `"inventory"`). That is brittle and no better than regex. Only match specific words when the vocabulary is truly fixed and closed — month names, ISO date parts, enum values defined by the domain.
 
 ## Examples
 
@@ -15,10 +17,34 @@ Prefer flexible string scanning instead: `str.find`, slicing, whitespace splitti
 # ❌ BAD — regex for query parsing
 FORECAST_UNITS = re.compile(r"\b(\d[\d,]*)\s+units?\b", re.IGNORECASE)
 
-# ✅ GOOD — scan for "unit"/"units" and read the preceding number
+# ❌ BAD — scanning free-form text for arbitrary words
 def _parse_forecast_units(content: str) -> int | None:
     lowered = content.lower()
     for suffix in ("units", "unit"):
-        position = lowered.find(suffix, start)
+        position = lowered.find(suffix)
         # ... scan backwards for digits
+
+# ✅ GOOD — accept structured tool arguments (year, month, forecast_units)
+def update_sales_forecast(
+    product_name: str,
+    year: int | str | None,
+    month: str | int | None,
+    forecast_units: int,
+) -> str:
+    ...
+
+# ✅ GOOD — fixed vocabulary lookup (months) plus structural formats (digits, YYYY-MM)
+MONTH_ALIASES = {"jan": 1, "january": 1, ...}
+
+def _parse_month_number(month: str | int | None) -> int | None:
+    if isinstance(month, int):
+        return month if 1 <= month <= 12 else None
+    text = str(month).strip()
+    if text.isdigit():
+        number = int(text)
+        return number if 1 <= number <= 12 else None
+    key = text.lower()
+    if key in MONTH_ALIASES:
+        return MONTH_ALIASES[key]
+    return None
 ```
