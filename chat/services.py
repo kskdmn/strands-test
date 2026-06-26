@@ -8,11 +8,7 @@ from strands import Agent
 from chat.tools.catalog import list_available_products
 from chat.tools.time import current_time
 
-from chat.agents.subagents import (
-    inventory_assistant,
-    production_schedule_assistant,
-    sales_forecast_assistant,
-)
+from chat.agents.subagents import psi_planning
 from chat.flow_log import FLOW_LOG_HOOKS, log_request_end, log_request_start
 from chat.message_parts import build_assistant_parts
 from chat.models import Conversation, Message
@@ -27,9 +23,7 @@ class ChatService:
         self._tools = [
             current_time,
             list_available_products,
-            sales_forecast_assistant,
-            production_schedule_assistant,
-            inventory_assistant,
+            psi_planning,
         ]
 
     def create_conversation(self) -> Conversation:

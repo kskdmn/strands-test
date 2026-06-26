@@ -1,7 +1,6 @@
 import json
-from datetime import date, timedelta
+from datetime import date
 
-from django.db.models import Sum
 from strands import tool
 
 from chat.models import FactoryLine, InventoryMonthlyData, ProductionMonthlyData, Product, SalesMonthlyData
@@ -97,12 +96,6 @@ def _parse_month(month: str) -> date:
     return month_start
 
 
-def _month_end(month_start: date) -> date:
-    if month_start.month == 12:
-        return date(month_start.year + 1, 1, 1) - timedelta(days=1)
-    return date(month_start.year, month_start.month + 1, 1) - timedelta(days=1)
-
-
 def _latest_inventory_quantity(product: Product) -> int:
     record = (
         InventoryMonthlyData.objects.filter(product=product, month__lt=current_month_start())
@@ -112,17 +105,6 @@ def _latest_inventory_quantity(product: Product) -> int:
     if record is not None and record.actual_quantity is not None:
         return record.actual_quantity
     return 0
-
-
-def _incoming_production(product_id: int, through: date) -> int:
-    return (
-        ProductionMonthlyData.objects.filter(
-            product_id=product_id,
-            month__gte=current_month_start(),
-            month__lte=date(through.year, through.month, 1),
-        ).aggregate(total=Sum("plan_quantity"))["total"]
-        or 0
-    )
 
 
 def _pick_production_line() -> FactoryLine | None:
@@ -213,26 +195,73 @@ def update_sales_forecast(
     )
 
 
+def _sales_units_for_month(product: Product, month: date) -> int | None:
+    record = SalesMonthlyData.objects.filter(product=product, month=month).first()
+    if record is None:
+        return None
+    if is_plan_month(month):
+        return record.plan_units
+    return record.actual_units
+
+
+def _production_units_for_month(product: Product, month: date) -> int:
+    record = ProductionMonthlyData.objects.filter(product=product, month=month).first()
+    if record is None:
+        return 0
+    if is_plan_month(month):
+        return record.plan_quantity or 0
+    return record.actual_quantity or 0
+
+
+def _inventory_units_for_month(product: Product, month: date) -> int | None:
+    record = InventoryMonthlyData.objects.filter(product=product, month=month).first()
+    if record is None:
+        return None
+    if is_plan_month(month):
+        return record.plan_quantity
+    return record.actual_quantity
+
+
+def _next_month(month: date) -> date:
+    if month.month == 12:
+        return date(month.year + 1, 1, 1)
+    return date(month.year, month.month + 1, 1)
+
+
+def _project_inventory(
+    product: Product,
+    month: date,
+    *,
+    starting_inventory: int,
+    previous_production: int,
+) -> int:
+    sales = _sales_units_for_month(product, month) or 0
+    return starting_inventory - sales + previous_production
+
+
 @tool
 def suggest_production_plan(
     product_name: str | None = None,
-    months: int = 1,
+    months: int = 6,
     start_month: str | None = None,
 ) -> str:
-    """Suggest production changes based on saved sales forecasts and current supply.
+    """Suggest production changes using PSI rules (suggestions only).
 
-    Compares forecast demand against available inventory and incoming production,
-    then recommends additional or reduced production where needed.
+    For each month, projects inventory with:
+    current month inventory = previous month inventory − current month sales
+    + previous month production.
+
+    Recommends production when projected inventory is below three times the next month's sales.
 
     Args:
         product_name: Optional product name filter. Returns all products when omitted.
-        months: Number of upcoming forecast months to plan for, up to 6.
-        start_month: Optional first forecast month to include in YYYY-MM format.
+        months: Number of months to analyze, up to 12.
+        start_month: Optional first month in YYYY-MM format. Defaults to current month.
 
     Returns:
-        JSON string with supply gaps and recommended production actions.
+        JSON string with monthly PSI projections and production suggestions.
     """
-    months = max(1, min(months, 6))
+    months = max(1, min(months, 12))
     first_month = current_month_start()
     if start_month:
         try:
@@ -240,71 +269,93 @@ def suggest_production_plan(
         except (ValueError, AttributeError):
             return json.dumps({"error": "start_month must be in YYYY-MM format."})
 
-    forecasts = (
-        SalesMonthlyData.objects.select_related("product")
-        .filter(month__gte=first_month, plan_units__isnull=False)
-        .order_by("product__name", "month")
-    )
+    products = Product.objects.order_by("name")
     if product_name:
-        forecasts = forecasts.filter(product__name__icontains=product_name.strip())
+        products = products.filter(name__icontains=product_name.strip())
 
-    if not forecasts.exists():
+    if not products.exists():
         return json.dumps(
             {
                 "recommendations": [],
-                "message": (
-                    "No sales forecasts found for the requested period. "
-                    "Use update_sales_forecast first."
-                ),
+                "message": "No products found for the requested filter.",
             }
         )
 
-    grouped: dict[str, list[SalesMonthlyData]] = {}
-    for forecast in forecasts:
-        product_forecasts = grouped.setdefault(forecast.product.name, [])
-        if len(product_forecasts) >= months:
-            continue
-        product_forecasts.append(forecast)
-
     recommendations = []
-    for name, product_forecasts in grouped.items():
-        product = product_forecasts[0].product
-        on_hand = _latest_inventory_quantity(product)
-        available = max(on_hand - product.reserved_quantity, 0)
-
-        forecast_demand = sum(forecast.plan_units or 0 for forecast in product_forecasts)
-        last_month = product_forecasts[-1].month
-        incoming = _incoming_production(product.id, _month_end(last_month))
-        projected_supply = available + incoming
-        gap = forecast_demand - projected_supply
-
-        if gap > 0:
-            action = "increase_production"
-            detail = f"Schedule {gap} additional units to cover forecast demand."
-        elif gap < 0:
-            action = "reduce_or_delay_production"
-            detail = (
-                f"Supply exceeds forecast by {abs(gap)} units. "
-                "Consider delaying or reducing planned production."
-            )
+    for product in products:
+        month_cursor = first_month
+        prev_inventory = _latest_inventory_quantity(product)
+        if month_cursor.month == 1:
+            prev_month = date(month_cursor.year - 1, 12, 1)
         else:
-            action = "maintain_current_plan"
-            detail = "Current inventory and incoming production match forecast demand."
+            prev_month = date(month_cursor.year, month_cursor.month - 1, 1)
+        prev_production = _production_units_for_month(product, prev_month)
 
-        line = _pick_production_line()
+        monthly_rows = []
+        for _ in range(months):
+            recorded_inventory = _inventory_units_for_month(product, month_cursor)
+            sales = _sales_units_for_month(product, month_cursor)
+            next_month = _next_month(month_cursor)
+            next_month_sales = _sales_units_for_month(product, next_month)
+            projected_inventory = _project_inventory(
+                product,
+                month_cursor,
+                starting_inventory=prev_inventory,
+                previous_production=prev_production,
+            )
+            inventory_value = recorded_inventory if recorded_inventory is not None else projected_inventory
+            threshold = 3 * next_month_sales if next_month_sales is not None else None
+            shortfall = (threshold - inventory_value) if threshold is not None else None
+
+            if next_month_sales is None:
+                action = "no_sales_data"
+                detail = (
+                    f"No sales data for {next_month.isoformat()}; "
+                    "cannot evaluate the 3× next-month sales rule."
+                )
+            elif inventory_value < threshold:
+                action = "increase_production"
+                detail = (
+                    f"Inventory ({inventory_value}) is below 3× next month's sales ({threshold}). "
+                    f"Suggest producing at least {shortfall} additional units."
+                )
+            else:
+                action = "maintain_current_plan"
+                detail = (
+                    f"Inventory ({inventory_value}) meets the 3× next-month sales threshold ({threshold})."
+                )
+
+            line = _pick_production_line()
+            monthly_rows.append(
+                {
+                    "month": month_cursor.isoformat(),
+                    "sales": sales,
+                    "next_month": next_month.isoformat(),
+                    "next_month_sales": next_month_sales,
+                    "previous_production": prev_production,
+                    "projected_inventory": projected_inventory,
+                    "recorded_inventory": recorded_inventory,
+                    "inventory_used": inventory_value,
+                    "inventory_threshold": threshold,
+                    "shortfall": max(shortfall, 0) if shortfall is not None else None,
+                    "recommended_action": action,
+                    "recommendation": detail,
+                    "suggested_line": line.name if line and action == "increase_production" else None,
+                }
+            )
+
+            prev_production = _production_units_for_month(product, month_cursor)
+            prev_inventory = inventory_value
+            if month_cursor.month == 12:
+                month_cursor = date(month_cursor.year + 1, 1, 1)
+            else:
+                month_cursor = date(month_cursor.year, month_cursor.month + 1, 1)
+
         recommendations.append(
             {
-                "product": name,
+                "product": product.name,
                 "sku": product.sku,
-                "forecast_months": [forecast.month.isoformat() for forecast in product_forecasts],
-                "forecast_demand": forecast_demand,
-                "available_inventory": available,
-                "incoming_production": incoming,
-                "projected_supply": projected_supply,
-                "supply_gap": gap,
-                "recommended_action": action,
-                "recommendation": detail,
-                "suggested_line": line.name if line and gap > 0 else None,
+                "months": monthly_rows,
             }
         )
 

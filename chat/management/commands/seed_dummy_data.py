@@ -39,8 +39,10 @@ PRODUCT_SPECS = {
 
 
 def _parse_month_label(label: str) -> date:
-    year_part, month_part = label.strip().split("-", 1)
-    return date(2000 + int(year_part), MONTH_ABBREV[month_part], 1)
+    left, right = (part.strip() for part in label.split("-", 1))
+    if left.isdigit():
+        return date(2000 + int(left), MONTH_ABBREV[right], 1)
+    return date(2000 + int(right), MONTH_ABBREV[left], 1)
 
 
 def _parse_int_cells(cells: list[str]) -> list[int]:

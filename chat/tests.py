@@ -58,9 +58,9 @@ class InventoryTests(TestCase):
         self.assertEqual(row["available_quantity"], 200)
         self.assertEqual(row["stock_status"], "healthy")
 
-    def test_orchestrator_prompt_mentions_inventory_assistant(self):
+    def test_orchestrator_prompt_mentions_psi_planning(self):
         prompt = build_orchestrator_system_prompt()
-        self.assertIn("inventory_assistant", prompt)
+        self.assertIn("psi_planning", prompt)
 
 
 class PlanningTests(TestCase):
@@ -147,48 +147,67 @@ class PlanningTests(TestCase):
                 record = SalesMonthlyData.objects.get()
                 self.assertEqual(record.month, expected_month)
 
-    def test_suggest_production_plan_recommends_reduction_for_excess_supply(self):
+    def test_suggest_production_plan_recommends_increase_below_threshold(self):
         import json
+        from datetime import timedelta
 
         from chat.monthly_data import current_month_start
         from chat.models import ProductionMonthlyData, SalesMonthlyData
 
+        current_month = current_month_start()
+        next_month = (current_month.replace(day=28) + timedelta(days=4)).replace(day=1)
         product = self._create_planning_product(on_hand=700)
         SalesMonthlyData.objects.create(
             product=product,
-            month=current_month_start(),
+            month=current_month,
+            plan_units=100,
+        )
+        SalesMonthlyData.objects.create(
+            product=product,
+            month=next_month,
             plan_units=500,
         )
 
         payload = json.loads(suggest_production_plan(product_name="Widget A"))
 
-        recommendation = payload["recommendations"][0]
-        self.assertEqual(recommendation["supply_gap"], -200)
-        self.assertEqual(recommendation["recommended_action"], "reduce_or_delay_production")
-        self.assertIn("Supply exceeds forecast", recommendation["recommendation"])
-        self.assertIsNone(recommendation["suggested_line"])
+        month_row = payload["recommendations"][0]["months"][0]
+        self.assertEqual(month_row["projected_inventory"], 600)
+        self.assertEqual(month_row["next_month_sales"], 500)
+        self.assertEqual(month_row["inventory_threshold"], 1500)
+        self.assertEqual(month_row["recommended_action"], "increase_production")
+        self.assertIn("below 3× next month's sales", month_row["recommendation"])
         self.assertEqual(ProductionMonthlyData.objects.count(), 0)
 
-    def test_suggest_production_plan_maintains_balanced_plan(self):
+    def test_suggest_production_plan_maintains_when_threshold_met(self):
         import json
+        from datetime import timedelta
 
         from chat.monthly_data import current_month_start
         from chat.models import ProductionMonthlyData, SalesMonthlyData
 
-        product = self._create_planning_product(on_hand=500)
+        current_month = current_month_start()
+        next_month = (current_month.replace(day=28) + timedelta(days=4)).replace(day=1)
+        product = self._create_planning_product(on_hand=2000)
         SalesMonthlyData.objects.create(
             product=product,
-            month=current_month_start(),
+            month=current_month,
+            plan_units=500,
+        )
+        SalesMonthlyData.objects.create(
+            product=product,
+            month=next_month,
             plan_units=500,
         )
 
         payload = json.loads(suggest_production_plan(product_name="Widget A"))
 
-        recommendation = payload["recommendations"][0]
-        self.assertEqual(recommendation["supply_gap"], 0)
-        self.assertEqual(recommendation["recommended_action"], "maintain_current_plan")
-        self.assertIn("match forecast demand", recommendation["recommendation"])
-        self.assertIsNone(recommendation["suggested_line"])
+        month_row = payload["recommendations"][0]["months"][0]
+        self.assertEqual(month_row["projected_inventory"], 1500)
+        self.assertEqual(month_row["next_month_sales"], 500)
+        self.assertEqual(month_row["inventory_threshold"], 1500)
+        self.assertEqual(month_row["recommended_action"], "maintain_current_plan")
+        self.assertIn("meets the 3× next-month sales threshold", month_row["recommendation"])
+        self.assertIsNone(month_row["suggested_line"])
         self.assertEqual(ProductionMonthlyData.objects.count(), 0)
 
 
@@ -199,7 +218,7 @@ class MessagePartsTests(TestCase):
                 "role": "assistant",
                 "content": [
                     {"text": "I'll check inventory details."},
-                    {"toolUse": {"name": "inventory_assistant", "input": {"query": "Stock for Widget A"}}},
+                    {"toolUse": {"name": "psi_planning", "input": {"query": "Stock for Widget A"}}},
                 ],
             },
             {
@@ -222,7 +241,7 @@ class MessagePartsTests(TestCase):
         thinking, final_answer = split_turn_messages(new_messages)
 
         self.assertIn("I'll check inventory details.", thinking)
-        self.assertIn("inventory_assistant", thinking)
+        self.assertIn("psi_planning", thinking)
         self.assertIn("500 units available.", thinking)
         self.assertEqual(final_answer, "Widget A has 500 units available.")
 

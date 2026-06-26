@@ -4,13 +4,17 @@ A Django app with a chat UI and JSON HTTP API, backed by a [Strands Agents](http
 
 The browser UI at `/` sends messages to the API, which stores conversation history in SQLite and returns assistant replies. No login or other pages are included.
 
-`ChatService` keeps one cached Strands orchestrator agent per conversation. Before each turn, the orchestrator prompt is rebuilt with the live product catalog from SQLite, then the model routes the message to direct tools or specialist subagents:
+`ChatService` keeps one cached Strands orchestrator agent per conversation. Before each turn, the orchestrator prompt is rebuilt with the live product catalog from SQLite, then the model routes the message to direct tools or the PSI planning subagent:
 
-- **Product catalog tool** — uses `list_available_products` to list products and available data types
-- **Sales forecast agent** — uses `fetch_past_sales_data` to read historical sales actuals from SQLite
-- **Production schedule agent** — uses `fetch_factory_status` to read factory lines and monthly production actual/plan data
-- **Inventory agent** — uses `fetch_inventory_status` to read stock levels, reservations, reorder points, and incoming production
-- **Current time tool** — uses `current_time` to return the local date and time
+- **Product catalog tool** — `list_available_products` lists products and available data types
+- **PSI planning subagent** — `psi_planning` coordinates sales, production, and inventory specialists (suggestions only; no database writes)
+- **Current time tool** — `current_time` returns the local date and time
+
+## PSI (Production-Sales-Inventory)
+
+- **Sales**: actual quantity (past) or planned quantity (future); independent of production and inventory
+- **Production**: suggest ordering when a month's inventory is below three times the next month's sales
+- **Inventory**: current month inventory = previous month inventory − current month sales + previous month production
 
 ## Query flow
 
@@ -31,19 +35,15 @@ flowchart TB
         CP[list_available_products] --> CDB[(SQLite products + data flags)]
     end
 
-    subgraph SalesPath["Sales path"]
+    subgraph PSIPath["PSI path"]
         direction TB
-        SA[Sales subagent] --> ST[fetch_past_sales_data] --> SDB[(SalesMonthlyData actuals)]
-    end
-
-    subgraph ProdPath["Production path"]
-        direction TB
-        PA[Production subagent] --> PT[fetch_factory_status] --> PDB[(FactoryLine + ProductionMonthlyData)]
-    end
-
-    subgraph InvPath["Inventory path"]
-        direction TB
-        IA[Inventory subagent] --> IT[fetch_inventory_status] --> IDB[(Product + InventoryMonthlyData + ProductionMonthlyData)]
+        PSI[psi_planning] --> SA[sales_assistant]
+        PSI --> PA[production_assistant]
+        PSI --> IA[inventory_assistant]
+        SA --> ST[fetch_sales_monthly_data] --> SDB[(SalesMonthlyData)]
+        PA --> PT[fetch_production_monthly_data] --> PDB[(ProductionMonthlyData)]
+        PA --> SP[suggest_production_plan]
+        IA --> IT[fetch_inventory_monthly_data] --> IDB[(InventoryMonthlyData)]
     end
 
     subgraph TimePath["Time path"]
@@ -52,16 +52,12 @@ flowchart TB
     end
 
     Route -->|Products / capabilities| CP
-    Route -->|Sales| SA
-    Route -->|Production| PA
-    Route -->|Inventory| IA
+    Route -->|Sales / production / inventory| PSI
     Route -->|Time| CT
 
     Direct --> Reply[Final reply]
     CP --> Reply
-    SA --> Reply
-    PA --> Reply
-    IA --> Reply
+    PSI --> Reply
     CT --> Reply
 
     Reply --> Save[(Store user + assistant messages)]
@@ -76,14 +72,14 @@ flowchart TB
 
     class User,UI,RespUI,UserOut client
     class API,Service,RespAPI,Reply,Save server
-    class Orch,Route,Direct,SA,PA,IA,CT,CP agent
-    class ST,PT,IT,SDB,PDB,IDB,CDB,Clock,History,Prompt data
+    class Orch,Route,Direct,PSI,SA,PA,IA,CT,CP agent
+    class ST,PT,IT,SP,SDB,PDB,IDB,CDB,Clock,History,Prompt data
 ```
 
 1. The user sends a message from the chat UI to the Django API.
 2. `ChatService` loads or creates the conversation's cached orchestrator, rebuilds its system prompt with the current product catalog, and sends the user message to Strands.
-3. The orchestrator follows the prompt routing rules: product catalog, sales, production schedule, inventory, time, or direct general conversation.
-4. Specialist subagents call their database-backed tools.
+3. The orchestrator follows the prompt routing rules: product catalog, PSI planning, time, or direct general conversation.
+4. `psi_planning` delegates to sales, production, and inventory subagents, which read SQLite via their tools and return suggestions only.
 5. Every request, agent invocation, model call, and tool call is logged through `FLOW_LOG_HOOKS` with the conversation ID.
 6. Assistant messages derive `thinking` from orchestrator tool calls and tool results during the turn; the last plain assistant reply is the final answer.
 7. The final assistant text is stored with the user message and returned through the API to the chat UI.
