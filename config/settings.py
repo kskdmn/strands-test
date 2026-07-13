@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'chat',
+    'single_round',
 ]
 
 MIDDLEWARE = [
@@ -145,6 +146,11 @@ LOGGING = {
     },
     "loggers": {
         "chat.flow": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "single_round.flow": {
             "handlers": ["console"],
             "level": "INFO",
             "propagate": False,

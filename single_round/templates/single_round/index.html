@@ -1,0 +1,51 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Single-round chat</title>
+  <link rel="stylesheet" href="{% static 'chat/css/chat.css' %}">
+  <link rel="stylesheet" href="{% static 'single_round/css/single_round.css' %}">
+</head>
+<body>
+  <main class="chat-app single-round-app">
+    <header class="chat-header">
+      <div>
+        <p class="eyebrow">Strands Test</p>
+        <h1>Single-round chat</h1>
+        <p class="header-note">Each message is handled independently. No conversation history is sent to the server.</p>
+      </div>
+      <button id="clear-button" type="button" class="secondary-button">Clear</button>
+    </header>
+
+    <section id="message-list" class="message-list" aria-live="polite"></section>
+
+    <form id="chat-form" class="chat-form">
+      {% csrf_token %}
+      <label class="sr-only" for="message-input">Message</label>
+      <textarea
+        id="message-input"
+        name="message"
+        rows="1"
+        placeholder="Ask a one-off question..."
+        required
+      ></textarea>
+      <button id="send-button" type="submit">Send</button>
+    </form>
+  </main>
+
+  <template id="message-template">
+    <article class="message">
+      <div class="message-meta"></div>
+      <details class="message-thinking">
+        <summary>Thinking</summary>
+        <div class="message-thinking-content"></div>
+      </details>
+      <div class="message-content"></div>
+    </article>
+  </template>
+
+  <script src="{% static 'single_round/js/single_round.js' %}"></script>
+</body>
+</html>
