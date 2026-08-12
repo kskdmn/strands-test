@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 from strands import Agent
 from strands.agent.agent_result import AgentResult
@@ -35,7 +35,10 @@ class GraphStreamingAgent(Agent):
 
     async def stream_async(self, prompt: Any = None, **kwargs: Any) -> AsyncIterator[Any]:
         collected: list[str] = []
-        async for event in self._graph.stream_async(prompt if prompt is not None else ""):
+        async for event in self._graph.stream_async(
+            prompt if prompt is not None else "",
+            **kwargs,
+        ):
             for chunk in _extract_data_chunks(event):
                 collected.append(chunk)
                 yield {"data": f"{chunk}\n"}
@@ -49,3 +52,10 @@ class GraphStreamingAgent(Agent):
                 state={},
             )
         }
+
+    async def invoke_async(self, prompt: Any = None, **kwargs: Any) -> AgentResult:
+        events = self.stream_async(prompt, **kwargs)
+        async for event in events:
+            _ = event
+
+        return cast(AgentResult, event["result"])
